@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-22
-**Tasks Completed:** 19 / 25
-**Current Task:** Task 19 - hidden dataサニタイズと確定後検証を実装する (完了)
+**Tasks Completed:** 21 / 25
+**Current Task:** Task 21 - 警告バナー・設定ダイアログ・キーボードショートカット・アクセシビリティを実装する (完了)
 
 ---
 
@@ -811,3 +811,97 @@
 - `npm run build` - 成功
 
 **課題:** Pythonワーカー環境がないため、実際のPDFサニタイズ・検証の実行時テストは未実施。Tauri環境 + Python環境導入後に動作確認が必要。
+
+### 2026-04-22 - Task 20: 一時ファイル安全削除・自動保存・バックアップシステムを実装する
+
+**変更内容:**
+- `python-worker/worker.py` 更新 - 一時ファイル安全削除機能を実装
+  - `secure_delete_file()`: 3パス安全削除（ゼロ書き込み→ランダムデータ書き込み→ゼロ書き込み→unlink）。各パスで `os.fsync()` 呼び出しによりディスクへの確実な書き込みを保証
+  - `create_managed_temp_file()`: ワーカー終了時に自動的に安全削除される管理付き一時ファイル作成
+  - `cleanup_temp_files()`: 全管理付き一時ファイルの安全削除（`main()` の `finally` ブロックで呼び出し）
+  - `_managed_temp_files` グローバルリストで管理された一時ファイルを追跡
+  - `handle_finalize_masking` 内の `tempfile.mkstemp()` を `create_managed_temp_file()` に変更
+  - `os.unlink()` を `secure_delete_file()` に変更し、管理リストからも削除
+  - `import os`, `import tempfile` を追加
+- `src-tauri/src/document_state.rs` 大幅更新
+  - `save_to_file()`: アトミック書き込み実装（一時ファイルに書き込み→sync→rename）。クラッシュ時の破損防止
+  - `load_from_file()`: クラッシュリカバリー実装。空ファイル・無効JSONを検出し、最新のバックアップから自動復元
+  - `create_backup()`: 3世代バックアップローテーション実装（.bak1→.bak2→.bak3→削除）
+  - `can_recover()`: ファイルが破損しているがバックアップから復元可能かチェック
+  - `list_backups()`: 利用可能なバックアップ一覧を取得
+  - `BackupInfo` 構造体: バックアップファイルのメタデータ（パス、世代、更新日時、サイズ）
+  - `find_latest_backup()`: 最新のバックアップファイルを検索
+  - `get_auto_save_dir()`: `%APPDATA%/RedactSafe/documents/` 自動保存ディレクトリ取得
+  - `get_auto_save_path()`: ドキュメントIDベースの自動保存ファイルパス生成
+  - テスト4件追加（全テスト通過）:
+    - `test_atomic_save_and_load`: アトミック書き込みと読み込みの正常動作確認
+    - `test_backup_rotation`: 3世代バックアップローテーションの確認（4世代目で.bak3削除）
+    - `test_crash_recovery_from_backup`: 空ファイルからのバックアップ自動復元確認
+    - `test_crash_recovery_invalid_json`: 無効JSONからのバックアップ自動復元確認
+- `src-tauri/src/lib.rs` 更新 - 自動保存関連Tauriコマンド追加
+  - `AutoSavePathState`: 自動保存ファイルパス追跡用の状態管理
+  - `auto_save_document`: バックアップ作成→アトミック書き込みによる自動保存
+  - `set_auto_save_path` / `get_auto_save_path`: 自動保存パスの設定・取得
+  - `generate_auto_save_path`: ドキュメントIDベースの自動保存パス生成
+  - `can_recover_document` / `list_backups`: バックアップ管理コマンド
+  - `create_document` に自動保存パス初期化を追加
+  - `load_document` に自動保存パス設定を追加
+  - `AutoSavePathState` を `manage()` に登録
+  - invoke_handlerに6つの新コマンドを登録（合計52コマンド）
+- `src-tauri/src/audit_log.rs` 更新 - 監査ログPIIテキストフィルタリングを実装
+  - `filter_pii_from_data()`: 監査ログの `data` フィールドからPIIテキストフィールドを自動除去
+  - `PII_TEXT_FIELDS` 定数: `text`, `original_text`, `matched_text`, `content`, `value`, `excerpt`, `preview`, `description`, `detail_text`, `name_text` をフィルタ対象として定義
+  - `log_event()` メソッド内でデータ記録前に自動フィルタリングを実行
+  - 再帰的にJSONオブジェクト/配列を走査し、PIIテキストフィールドを除外
+- `src/main.js` 更新
+  - `autoSaveDocument()` を修正: 空パスの `save_document` 呼び出しから `auto_save_document` コマンド呼び出しに変更
+  - `startAutoSaveTimer()` / `stopAutoSaveTimer()`: 30秒間隔の定期自動保存タイマーを実装
+  - PDF読込完了時（`pdfViewer.onLoad`）に `startAutoSaveTimer()` を追加
+
+**実行コマンド:**
+- `cargo test` (src-tauri/) - 成功 (19 tests passed)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+
+**課題:** ブラウザでの動作確認は権限未承認のため未実施。ビルド成功で代替確認。
+
+### 2026-04-22 - Task 21: 警告バナー・設定ダイアログ・キーボードショートカット・アクセシビリティを実装する
+
+**変更内容:**
+- `index.html` 更新
+  - 警告バナーにアイコン（⚠）を追加し、初期状態で非表示（`style="display:none"`）に変更。ドキュメント読込後にdraft/confirmedでのみ表示されるよう制御
+  - 設定ダイアログ (`#settings-dialog`) を追加: フォントサイズ3段階（標準/大/特大）、圧縮方式（PNG/JPEG）、JPEG品質スライダー（85-100%）
+  - ヘルプダイアログ (`#help-dialog`) を追加: キーボードショートカット一覧テーブル
+  - メニューボタン（ファイル/設定/ヘルプ）にTooltip（`title`属性）を追加
+  - サイドバー一括ON/OFFボタンにTooltipを追加
+  - フッターツールバーの全てON/OFFボタンにTooltipを追加
+  - フィルターセレクトにTooltipを追加
+- `src/styles.css` 更新
+  - 警告バナーをflexboxレイアウト化（アイコン+テキスト）、`user-select: none`で選択不可に
+  - 設定ダイアログスタイル追加（`.modal-content-wide`, `.settings-section`, `.settings-label`, `.settings-radio-group`, `.settings-radio`, `.settings-slider`, `.settings-hint`）
+  - ヘルプダイアログショートカットテーブルスタイル追加（`.help-shortcuts-table`, `kbd`要素スタイル）
+  - フォントサイズ3段階CSSクラス追加（`.font-size-large`: 16px, `.font-size-xlarge`: 18px）各UI要素のフォントサイズを段階的に拡大
+- `src/main.js` 大幅更新
+  - 警告バナー制御を改善: `docStatusManager.updateUI()`でdraft/confirmed時のみ表示、未読込/finalized時は非表示（`style.display`で直接制御）
+  - Settings Manager実装:
+    - `loadSettings()`: localStorageから設定を読込（デフォルト: 標準/PNG/90%）
+    - `saveSettings()`: localStorageに設定を保存
+    - `applySettings()`: フォントサイズCSSクラスをbodyに適用
+    - `showSettingsDialog()` / `hideSettingsDialog()`: 設定ダイアログの表示/非表示
+    - JPEG品質スライダーのリアルタイム値表示
+    - 圧縮方式をJPEGに変更時に品質スライダーセクションを表示
+  - Help Manager実装:
+    - `showHelpDialog()` / `hideHelpDialog()`: ヘルプダイアログの表示/非表示
+  - メニューボタンハンドラー実装: ファイル(Ctrl+Oと同等)、設定、ヘルプ
+  - 追加キーボードショートカット:
+    - `Ctrl+,`: 設定ダイアログを開く
+    - `Ctrl+W`: 幅に合わせるズーム
+    - `Escape`: 設定/ヘルプダイアログを閉じる、または選択中リージョンを解除
+    - `Tab`: 次のリージョンを選択（サイクル）
+    - `Shift+Tab`: 前のリージョンを選択（逆サイクル）
+
+**実行コマンド:**
+- `npm run build` - 成功
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+
+**課題:** ブラウザでの動作確認は権限未承認のため未実施。ビルド成功で代替確認。

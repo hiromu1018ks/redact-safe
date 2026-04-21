@@ -448,7 +448,7 @@ Tauri Desktop App
       "設定ファイルの直近3世代バックアップ保持機能を実装",
       "ログファイルに元の個人情報テキストを含めない（region_id・bbox・typeのみ）ことを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",
@@ -462,7 +462,7 @@ Tauri Desktop App
       "主要ボタンにTooltipを表示",
       "キーボードのみで全操作が完結できることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

@@ -381,13 +381,13 @@ const docStatusManager = {
       }
     }
 
-    // Warning banner visibility
+    // Warning banner visibility — only show in draft/confirmed when document is loaded
     const warningBanner = document.getElementById("warning-banner");
     if (warningBanner) {
-      if (status === "finalized") {
-        warningBanner.classList.add("hidden");
+      if (status === "draft" || status === "confirmed") {
+        warningBanner.style.display = "flex";
       } else {
-        warningBanner.classList.remove("hidden");
+        warningBanner.style.display = "none";
       }
     }
   },
@@ -659,13 +659,33 @@ function logAuditEvent(event, documentId, data) {
 
 /**
  * Auto-save document (Tauri only).
+ * Uses the tracked auto-save path managed by the Rust backend.
  */
 async function autoSaveDocument() {
   if (!isTauri) return;
   try {
-    await invoke("save_document", { path: "" });
+    await invoke("auto_save_document");
   } catch {
     // Auto-save is best-effort; document may not have a path yet
+  }
+}
+
+/**
+ * Start the periodic auto-save timer (every 30 seconds).
+ */
+let autoSaveTimer = null;
+
+function startAutoSaveTimer() {
+  stopAutoSaveTimer();
+  autoSaveTimer = setInterval(() => {
+    autoSaveDocument();
+  }, 30000); // 30 seconds
+}
+
+function stopAutoSaveTimer() {
+  if (autoSaveTimer) {
+    clearInterval(autoSaveTimer);
+    autoSaveTimer = null;
   }
 }
 
@@ -1155,6 +1175,9 @@ function initPdfViewer() {
     updateSidebarRegions();
     updateWatermark();
     docStatusManager.refresh();
+
+    // Start periodic auto-save timer
+    startAutoSaveTimer();
 
     // Auto fit to width
     requestAnimationFrame(() => {
@@ -2578,3 +2601,247 @@ function toggleDebugPanel() {
   debugPanel.style.display =
     debugPanel.style.display === "none" ? "flex" : "none";
 }
+
+// ============================================================
+// Settings Manager
+// ============================================================
+
+const FONT_SIZE_CLASSES = {
+  standard: "",
+  large: "font-size-large",
+  xlarge: "font-size-xlarge",
+};
+
+const DEFAULT_SETTINGS = {
+  fontSize: "standard",
+  compression: "png",
+  jpegQuality: 90,
+};
+
+/** Load settings from localStorage */
+function loadSettings() {
+  try {
+    const stored = localStorage.getItem("redactsafe_settings");
+    if (stored) {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return { ...DEFAULT_SETTINGS };
+}
+
+/** Save settings to localStorage */
+function saveSettings(settings) {
+  try {
+    localStorage.setItem("redactsafe_settings", JSON.stringify(settings));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/** Apply settings to the UI */
+function applySettings(settings) {
+  // Font size
+  document.body.classList.remove("font-size-large", "font-size-xlarge");
+  const fontClass = FONT_SIZE_CLASSES[settings.fontSize] || "";
+  if (fontClass) document.body.classList.add(fontClass);
+}
+
+/** Get current settings */
+let currentSettings = loadSettings();
+applySettings(currentSettings);
+
+const settingsDialog = document.getElementById("settings-dialog");
+const btnSettingsOk = document.getElementById("btn-settings-ok");
+const btnSettingsCancel = document.getElementById("btn-settings-cancel");
+const jpegQualitySlider = document.getElementById("jpeg-quality-slider");
+const jpegQualityValue = document.getElementById("jpeg-quality-value");
+const jpegQualitySection = document.getElementById("jpeg-quality-section");
+
+function showSettingsDialog() {
+  const settings = loadSettings();
+
+  // Set radio buttons
+  const fontRadios = document.querySelectorAll('input[name="font-size"]');
+  fontRadios.forEach((r) => { r.checked = r.value === settings.fontSize; });
+
+  const compRadios = document.querySelectorAll('input[name="compression"]');
+  compRadios.forEach((r) => { r.checked = r.value === settings.compression; });
+
+  // Set JPEG quality
+  jpegQualitySlider.value = settings.jpegQuality;
+  jpegQualityValue.textContent = settings.jpegQuality;
+  jpegQualitySection.style.display = settings.compression === "jpeg" ? "block" : "none";
+
+  settingsDialog.style.display = "flex";
+
+  // Focus the first radio button
+  setTimeout(() => {
+    const firstRadio = settingsDialog.querySelector('input[type="radio"]');
+    if (firstRadio) firstRadio.focus();
+  }, 50);
+}
+
+function hideSettingsDialog() {
+  settingsDialog.style.display = "none";
+}
+
+// JPEG quality slider live update
+jpegQualitySlider.addEventListener("input", () => {
+  jpegQualityValue.textContent = jpegQualitySlider.value;
+});
+
+// Show/hide JPEG quality section when compression changes
+document.querySelectorAll('input[name="compression"]').forEach((r) => {
+  r.addEventListener("change", () => {
+    jpegQualitySection.style.display = r.value === "jpeg" && r.checked ? "block" : "none";
+  });
+});
+
+btnSettingsOk.addEventListener("click", () => {
+  const fontSize = document.querySelector('input[name="font-size"]:checked')?.value || "standard";
+  const compression = document.querySelector('input[name="compression"]:checked')?.value || "png";
+  const jpegQuality = parseInt(jpegQualitySlider.value, 10);
+
+  currentSettings = { fontSize, compression, jpegQuality };
+  saveSettings(currentSettings);
+  applySettings(currentSettings);
+  hideSettingsDialog();
+});
+
+btnSettingsCancel.addEventListener("click", () => {
+  hideSettingsDialog();
+});
+
+// Escape to close settings
+settingsDialog.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    hideSettingsDialog();
+  }
+});
+
+// ============================================================
+// Help Dialog
+// ============================================================
+
+const helpDialog = document.getElementById("help-dialog");
+const btnHelpClose = document.getElementById("btn-help-close");
+
+function showHelpDialog() {
+  helpDialog.style.display = "flex";
+  setTimeout(() => {
+    btnHelpClose.focus();
+  }, 50);
+}
+
+function hideHelpDialog() {
+  helpDialog.style.display = "none";
+}
+
+btnHelpClose.addEventListener("click", () => {
+  hideHelpDialog();
+});
+
+helpDialog.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    hideHelpDialog();
+  }
+});
+
+// ============================================================
+// Menu Button Handlers
+// ============================================================
+
+document.getElementById("menu-file").addEventListener("click", () => {
+  if (!docStatusManager.getStatus()) {
+    openPdfFile();
+  }
+});
+
+document.getElementById("menu-settings").addEventListener("click", () => {
+  showSettingsDialog();
+});
+
+document.getElementById("menu-help").addEventListener("click", () => {
+  showHelpDialog();
+});
+
+// ============================================================
+// Additional Keyboard Shortcuts
+// ============================================================
+
+document.addEventListener("keydown", (e) => {
+  // Don't capture when typing in inputs
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") {
+    return;
+  }
+
+  // Ctrl+,: Open settings
+  if (e.ctrlKey && e.key === ",") {
+    e.preventDefault();
+    showSettingsDialog();
+    return;
+  }
+
+  // Ctrl+W: Fit to width
+  if (e.ctrlKey && e.key === "w") {
+    e.preventDefault();
+    if (pdfViewer && pdfViewer.isLoaded) {
+      const containerWidth = pdfContainer.clientWidth - 32;
+      if (containerWidth > 0) {
+        pdfViewer.fitToWidth(containerWidth);
+      }
+    }
+    return;
+  }
+
+  // Escape: Deselect region or close modals
+  if (e.key === "Escape" && !e.ctrlKey && !e.shiftKey) {
+    // Close settings dialog if open
+    if (settingsDialog.style.display === "flex") {
+      hideSettingsDialog();
+      return;
+    }
+    // Close help dialog if open
+    if (helpDialog.style.display === "flex") {
+      hideHelpDialog();
+      return;
+    }
+    // Deselect region on overlay
+    if (maskingOverlay && maskingOverlay.selectedRegionId) {
+      maskingOverlay.setSelectedRegion(null);
+      renderSidebar();
+      return;
+    }
+    return;
+  }
+
+  // Tab: Navigate between regions (cycle through)
+  if (e.key === "Tab" && !e.ctrlKey) {
+    e.preventDefault();
+    if (!maskingOverlay || !pdfViewer.isLoaded) return;
+
+    // Get all regions for the current page
+    const regions = maskingOverlay.regions;
+    if (regions.length === 0) return;
+
+    const currentId = maskingOverlay.selectedRegionId;
+    const currentIdx = regions.findIndex((r) => r.id === currentId);
+
+    let nextIdx;
+    if (e.shiftKey) {
+      // Shift+Tab: Previous region
+      nextIdx = currentIdx <= 0 ? regions.length - 1 : currentIdx - 1;
+    } else {
+      // Tab: Next region
+      nextIdx = (currentIdx + 1) % regions.length;
+    }
+
+    maskingOverlay.setSelectedRegion(regions[nextIdx].id);
+    renderSidebar();
+    return;
+  }
+});

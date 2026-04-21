@@ -295,6 +295,19 @@ main {
   font-size: 13px;
   border-bottom: 1px solid #ffc107;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+}
+
+.warning-banner-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.warning-banner-text {
+  flex: 1;
 }
 
 /* PDF Toolbar */
@@ -949,6 +962,20 @@ footer {
   background: #e9ecef;
 }
 
+.modal-btn-danger {
+  background: #d9534f;
+  border-color: #d9534f;
+}
+
+.modal-btn-danger:hover {
+  background: #c9302c;
+  border-color: #c9302c;
+}
+
+.modal-warning .modal-header h3 {
+  color: #d9534f;
+}
+
 /* Drop zone overlay */
 #pdf-container.drag-over {
   outline: 3px dashed #4a90d9;
@@ -970,3 +997,137 @@ footer {
   pointer-events: none;
   z-index: 10;
 }
+
+/* Settings Dialog */
+.modal-content-wide {
+  width: 520px;
+}
+
+.settings-section {
+  margin-bottom: 20px;
+}
+
+.settings-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: #333;
+  margin-bottom: 8px;
+}
+
+.settings-radio-group {
+  display: flex;
+  gap: 16px;
+}
+
+.settings-radio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #444;
+}
+
+.settings-radio input[type="radio"] {
+  cursor: pointer;
+  accent-color: #4a90d9;
+}
+
+.settings-slider {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  cursor: pointer;
+  accent-color: #4a90d9;
+}
+
+.settings-hint {
+  display: block;
+  font-size: 12px;
+  color: #888;
+  margin-top: 4px;
+}
+
+/* Help Dialog - Shortcuts Table */
+.help-shortcuts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.help-shortcuts-table th,
+.help-shortcuts-table td {
+  padding: 6px 12px;
+  text-align: left;
+  border-bottom: 1px solid #eee;
+}
+
+.help-shortcuts-table th {
+  font-weight: 600;
+  color: #1a1a2e;
+  background: #f8f9fa;
+}
+
+.help-shortcuts-table td:first-child {
+  color: #333;
+}
+
+.help-shortcuts-table td:last-child {
+  text-align: right;
+}
+
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 12px;
+  font-family: "Segoe UI", sans-serif;
+  color: #333;
+  background: #f0f0f0;
+  border: 1px solid #ccc;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 #ccc;
+}
+
+/* Font size variants */
+body.font-size-large {
+  font-size: 16px;
+}
+
+body.font-size-large header h1 { font-size: 18px; }
+body.font-size-large .sidebar-header h2 { font-size: 17px; }
+body.font-size-large .region-item .region-type { font-size: 13px; }
+body.font-size-large .region-item .region-meta { font-size: 12px; }
+body.font-size-large .pdf-toolbar-group button { font-size: 14px; }
+body.font-size-large #toolbar button { font-size: 14px; }
+body.font-size-large .modal-body p { font-size: 15px; }
+body.font-size-large .modal-label { font-size: 14px; }
+body.font-size-large .modal-input { font-size: 15px; }
+body.font-size-large .settings-label { font-size: 15px; }
+body.font-size-large .settings-radio { font-size: 15px; }
+body.font-size-large .worker-test h3 { font-size: 15px; }
+body.font-size-large .worker-test button { font-size: 14px; }
+body.font-size-large .region-count { font-size: 13px; }
+
+body.font-size-xlarge {
+  font-size: 18px;
+}
+
+body.font-size-xlarge header h1 { font-size: 20px; }
+body.font-size-xlarge .sidebar-header h2 { font-size: 19px; }
+body.font-size-xlarge .region-item .region-type { font-size: 15px; }
+body.font-size-xlarge .region-item .region-meta { font-size: 13px; }
+body.font-size-xlarge .pdf-toolbar-group button { font-size: 15px; }
+body.font-size-xlarge #toolbar button { font-size: 15px; }
+body.font-size-xlarge .modal-body p { font-size: 16px; }
+body.font-size-xlarge .modal-label { font-size: 15px; }
+body.font-size-xlarge .modal-input { font-size: 16px; }
+body.font-size-xlarge .settings-label { font-size: 16px; }
+body.font-size-xlarge .settings-radio { font-size: 16px; }
+body.font-size-xlarge .worker-test h3 { font-size: 16px; }
+body.font-size-xlarge .worker-test button { font-size: 15px; }
+body.font-size-xlarge .region-count { font-size: 14px; }
