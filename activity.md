@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-22
-**Tasks Completed:** 18 / 25
-**Current Task:** Task 18 - 確定マスキング処理（300dpi画像化→黒塗り焼き込み→PDF再生成）を実装する (完了)
+**Tasks Completed:** 19 / 25
+**Current Task:** Task 19 - hidden dataサニタイズと確定後検証を実装する (完了)
 
 ---
 
@@ -769,3 +769,45 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** Pythonワーカー環境がないため、実際のPDFラスタライズ・黒塗り焼き込みの実行時テストは未実施。Tauri環境 + Python環境導入後にエンドツーエンドの動作確認が必要。
+
+### 2026-04-22 - Task 19: hidden dataサニタイズと確定後検証を実装する
+
+**変更内容:**
+- `python-worker/pdf_sanitizer.py` 作成 - PDFサニタイズ・検証モジュール実装
+  - `sanitize_metadata()`: XMPメタデータ・DocInfo辞書の完全除去（title, author, subject, keywords, creator, producer等）
+  - `sanitize_annotations()`: 全ページのアノテーション除去（text, link, widget, markup等）
+  - `sanitize_embedded_files()`: 埋め込みファイルの除去（EmbeddedFilesツリー + embfile削除）
+  - `sanitize_form_fields()`: フォームフィールド除去（AcroForm辞書 + XFAコンテンツ + ページ上のwidget削除）
+  - `sanitize_javascript()`: JavaScriptアクション除去（OpenAction, AA, JavaScript name tree）
+  - `sanitize_bookmarks()`: ブックマーク除去（TOC + Outlinesカタログエントリ）
+  - `sanitize_hidden_layers()`: 隠しレイヤー除去（OCProperties + Properties内のOCG/OCMD参照）
+  - `set_permissions()`: コピー禁止パーミッション設定（AES-256暗号化、印刷のみ許可）
+  - `sanitize_pdf()`: 全サニタイズステップを統合実行するメイン関数
+  - `verify_safe_pdf()`: 出力PDFの安全性検証（テキスト不在・hidden data不在・メタデータ不在・オブジェクト全走査）
+  - `verify_safe_pdf_base64()`: base64データからの検証（JSON-RPC用エントリポイント）
+- `python-worker/worker.py` 更新
+  - `handle_finalize_masking` を大幅更新:
+    - 黒塗り焼き込み後に `sanitize_pdf()` を呼び出してhidden data除去
+    - 一時ファイル経由でAES-256暗号化 + パーミッション設定を適用して保存
+    - 出力PDFを `verify_safe_pdf()` で検証
+    - 検証失敗時は出力PDFを破棄し `VERIFICATION_FAILED` エラーで中断
+    - 返り値に `sanitization` と `verification` 結果を追加
+  - `handle_verify_safe_pdf` ハンドラ追加 - 既存PDFの安全性検証JSON-RPCコマンド
+  - HANDLERSに `verify_safe_pdf` を登録、バージョンを1.0.0に更新
+  - `pdf_sanitizer` モジュールをインポート
+- `src-tauri/src/lib.rs` 更新
+  - `verify_safe_pdf` Tauriコマンド追加: Pythonワーカー経由でPDF安全性検証
+  - `finalize_masking_pdf` のコメント更新（サニタイズ・検証を含むことを明記）
+  - invoke_handlerに `verify_safe_pdf` を登録（合計46コマンド）
+
+**検証ステップの詳細:**
+- テキストチェック: 全ページの `get_text("text")` で抽出可能テキストが0文字であることを確認
+- hidden dataチェック: アノテーション・埋め込みファイル・フォームウィジェット・AcroForm・XFA・JavaScript・ブックマーク・OCPropertiesの不在を確認
+- メタデータチェック: DocInfoフィールド・XMPストリームの不在を確認
+- オブジェクトスキャン: 全xrefオブジェクトを走査し `/JS`, `/JavaScript`, `/EmbeddedFile`, `/Launch`, `/SubmitForm`, `/GoTo` 参照の不在を確認
+
+**実行コマンド:**
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+
+**課題:** Pythonワーカー環境がないため、実際のPDFサニタイズ・検証の実行時テストは未実施。Tauri環境 + Python環境導入後に動作確認が必要。

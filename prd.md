@@ -436,7 +436,7 @@ Tauri Desktop App
       "出力後にPyMuPDFでPDFオブジェクト全走査による検証を実装（テキスト不在、hidden data不在の確認）",
       "検証失敗時は出力PDFを破棄しエラーとして中断する機能を実装"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

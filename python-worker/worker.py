@@ -62,6 +62,11 @@ from pii_detector import (
     check_regex_safety,
     load_rules_from_string,
 )
+from pdf_sanitizer import (
+    sanitize_pdf,
+    verify_safe_pdf,
+    verify_safe_pdf_base64,
+)
 
 
 def _open_pdf(params: dict):
@@ -222,7 +227,7 @@ def handle_ping(params: dict) -> dict:
 def handle_get_version(params: dict) -> dict:
     """Return worker version and available methods."""
     return {
-        "version": "0.9.0",
+        "version": "1.0.0",
         "methods": list(HANDLERS.keys()),
     }
 
@@ -636,10 +641,65 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
             del img_bytes
             pix = None  # Help GC
 
-        # Step 4: Save output PDF to bytes
+        # Step 4: Sanitize hidden data
+        send_progress(request_id, "sanitizing", total_pages, total_pages, "hidden dataを除去中...")
+        sanitize_result = sanitize_pdf(out_doc, set_perms=False)
+
+        # Step 5: Save output PDF to bytes (with permissions)
         send_progress(request_id, "saving", total_pages, total_pages, "安全PDFを生成中...")
-        out_bytes = out_doc.tobytes()
-        out_doc.close()
+        import tempfile
+        import os
+
+        # Save to temp file first (needed for encryption/permissions)
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(tmp_fd)
+        try:
+            # Set copy-prevention permissions via encryption
+            perm_flags = (
+                fitz.PDF_PERM_PRINT          # Allow printing (image-based only)
+                | fitz.PDF_PERM_ACCESSIBILITY  # Allow accessibility
+            )
+            out_doc.save(
+                tmp_path,
+                encryption=fitz.PDF_ENCRYPT_AES_256,
+                owner_pw="RedactSafe_Owner_2024!",
+                user_pw="",
+                permissions=perm_flags,
+                garbage=4,
+                deflate=True,
+            )
+            out_doc.close()
+            out_doc = None
+
+            # Read back the saved file
+            with open(tmp_path, "rb") as f:
+                out_bytes = f.read()
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+        # Step 6: Verify the output PDF is safe
+        send_progress(request_id, "verifying", total_pages, total_pages, "安全PDFを検証中...")
+        verify_doc = fitz.open(stream=out_bytes, filetype="pdf")
+        try:
+            verification = verify_safe_pdf(verify_doc)
+        finally:
+            verify_doc.close()
+
+        # Step 7: If verification fails, discard the output and raise error
+        if not verification["valid"]:
+            # Collect all issues for the error message
+            all_issues = []
+            for check_name in ["text_check", "hidden_data_check", "metadata_check", "object_scan"]:
+                check = verification.get(check_name, {})
+                if not check.get("passed", True):
+                    for issue in check.get("issues", []):
+                        all_issues.append(f"[{issue.get('type', '?')}] {issue.get('detail', '?')}")
+
+            error_detail = "; ".join(all_issues[:10])  # Limit to first 10 issues
+            raise ValueError(f"VERIFICATION_FAILED: {error_detail}")
 
         result_pdf_b64 = base64.b64encode(out_bytes).decode("ascii")
 
@@ -647,6 +707,8 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
             "pdf_data": result_pdf_b64,
             "pages_processed": total_pages,
             "regions_masked": total_regions_masked,
+            "sanitization": sanitize_result,
+            "verification": verification,
         }
     finally:
         src_doc.close()
@@ -667,6 +729,22 @@ def handle_detect_names(params: dict) -> dict:
         "detections": detections,
         "detection_count": len(detections),
     }
+
+
+def handle_verify_safe_pdf(params: dict) -> dict:
+    """Verify that a finalized PDF is safe (no text, no hidden data).
+
+    Args:
+        params: {pdf_data: base64-encoded PDF data}
+
+    Returns:
+        Verification results dictionary with valid, text_check, hidden_data_check, etc.
+    """
+    pdf_data_b64 = params.get("pdf_data", "")
+    if not pdf_data_b64:
+        raise ValueError("pdf_data is required")
+
+    return verify_safe_pdf_base64(pdf_data_b64)
 
 
 # Method dispatch table
@@ -694,6 +772,7 @@ HANDLERS = {
     "check_regex_safety": handle_check_regex_safety,
     "detect_names": handle_detect_names,
     "finalize_masking": handle_finalize_masking,
+    "verify_safe_pdf": handle_verify_safe_pdf,
 }
 
 

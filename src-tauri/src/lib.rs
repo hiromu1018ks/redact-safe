@@ -889,6 +889,7 @@ fn detect_names(
 
 /// Finalize masking: rasterize PDF pages, burn black rectangles, regenerate PDF via Python worker.
 /// Returns the finalized PDF as base64-encoded data.
+/// The Python worker now also sanitizes hidden data and verifies the output.
 #[tauri::command]
 fn finalize_masking_pdf(
     state: State<WorkerState>,
@@ -926,7 +927,7 @@ fn finalize_masking_pdf(
         }).collect::<Vec<_>>();
     }
 
-    // Call Python worker to perform the finalization
+    // Call Python worker to perform the finalization (includes sanitization + verification)
     let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     let worker = guard
         .as_mut()
@@ -941,6 +942,25 @@ fn finalize_masking_pdf(
     });
 
     let result = worker.call("finalize_masking", Some(params))?;
+    Ok(result)
+}
+
+/// Verify that a finalized PDF is safe (no text, no hidden data) via Python worker.
+#[tauri::command]
+fn verify_safe_pdf(
+    state: State<WorkerState>,
+    pdf_data_base64: String,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+    });
+
+    let result = worker.call("verify_safe_pdf", Some(params))?;
     Ok(result)
 }
 
@@ -1062,6 +1082,7 @@ pub fn run() {
             check_regex_safety,
             detect_names,
             finalize_masking_pdf,
+            verify_safe_pdf,
             generate_output_filename,
             read_file_as_base64,
             save_base64_to_file,
