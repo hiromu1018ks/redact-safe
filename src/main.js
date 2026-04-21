@@ -268,6 +268,131 @@ async function updateWatermark() {
 // Progress Manager
 // ============================================================
 
+// ============================================================
+// Document Status Manager
+// ============================================================
+
+const STATUS_LABELS = {
+  draft: "下書き",
+  confirmed: "確認済み",
+  finalized: "確定済み",
+};
+
+/** Current document status (cached in frontend) */
+let currentDocStatus = null; // null = no document, "draft" | "confirmed" | "finalized"
+
+const docStatusManager = {
+  /**
+   * Fetch document status from backend and update all UI accordingly.
+   */
+  async refresh() {
+    if (!isTauri) {
+      // Browser mode: always draft
+      currentDocStatus = "draft";
+    } else {
+      try {
+        currentDocStatus = await invoke("get_document_status");
+      } catch {
+        currentDocStatus = null;
+      }
+    }
+    this.updateUI();
+  },
+
+  /** Get current status string (or null) */
+  getStatus() {
+    return currentDocStatus;
+  },
+
+  /** Whether editing operations are allowed (only in draft) */
+  isEditable() {
+    return currentDocStatus === "draft";
+  },
+
+  /** Whether the document can be confirmed (only from draft) */
+  canConfirm() {
+    return currentDocStatus === "draft";
+  },
+
+  /** Whether the document can be rolled back (only from confirmed) */
+  canRollback() {
+    return currentDocStatus === "confirmed";
+  },
+
+  /** Whether the document can be finalized (only from confirmed) */
+  canFinalize() {
+    return currentDocStatus === "confirmed";
+  },
+
+  /**
+   * Update all UI elements based on current document status.
+   */
+  updateUI() {
+    const status = currentDocStatus;
+    const hasDoc = !!status;
+
+    // --- Status display badge ---
+    if (status) {
+      const badgeClass = `badge-${status}`;
+      statusDisplay.innerHTML = `${pdfViewer.fileName ? `${pdfViewer.fileName} — ${pdfViewer.currentPage || 1} / ${pdfViewer.totalPages || "?"}ページ` : ""} <span class="status-badge ${badgeClass}">${STATUS_LABELS[status] || status}</span>`;
+    } else {
+      statusDisplay.textContent = "未読込";
+    }
+
+    // --- Confirm button (visible/enabled only in draft with document) ---
+    const btnConfirm = document.getElementById("btn-confirm");
+    if (btnConfirm) {
+      btnConfirm.style.display = hasDoc ? "" : "none";
+      btnConfirm.disabled = !this.canConfirm();
+    }
+
+    // --- Rollback button (visible/enabled only in confirmed) ---
+    const btnRollback = document.getElementById("btn-rollback");
+    if (btnRollback) {
+      btnRollback.style.display = this.canRollback() ? "" : "none";
+      btnRollback.disabled = !this.canRollback();
+    }
+
+    // --- Finalize button (enabled only in confirmed) ---
+    const btnFinalize = document.getElementById("btn-finalize");
+    if (btnFinalize) {
+      btnFinalize.disabled = !this.canFinalize();
+    }
+
+    // --- Editing controls (disabled in confirmed/finalized) ---
+    const editable = this.isEditable();
+
+    // Sidebar bulk buttons
+    btnSidebarAllOn.disabled = !editable || !hasDoc;
+    btnSidebarAllOff.disabled = !editable || !hasDoc;
+
+    // Toolbar bulk buttons
+    const btnToolbarAllOn = document.getElementById("btn-toolbar-all-on");
+    const btnToolbarAllOff = document.getElementById("btn-toolbar-all-off");
+    if (btnToolbarAllOn) btnToolbarAllOn.disabled = !editable || !hasDoc;
+    if (btnToolbarAllOff) btnToolbarAllOff.disabled = !editable || !hasDoc;
+
+    // Overlay interaction
+    if (maskingOverlay) {
+      if (editable) {
+        overlayCanvas.classList.remove("interaction-disabled");
+      } else {
+        overlayCanvas.classList.add("interaction-disabled");
+      }
+    }
+
+    // Warning banner visibility
+    const warningBanner = document.getElementById("warning-banner");
+    if (warningBanner) {
+      if (status === "finalized") {
+        warningBanner.classList.add("hidden");
+      } else {
+        warningBanner.classList.remove("hidden");
+      }
+    }
+  },
+};
+
 const progressContainer = document.getElementById("progress-container");
 const progressBarFill = document.getElementById("progress-bar-fill");
 const progressMessage = document.getElementById("progress-message");
@@ -548,6 +673,7 @@ async function autoSaveDocument() {
 function onOverlayMouseDown(e) {
   if (!maskingOverlay || !pdfViewer.isLoaded) return;
   if (e.button !== 0) return; // left click only
+  if (!docStatusManager.isEditable()) return; // Block editing in non-draft state
 
   const clientX = e.clientX;
   const clientY = e.clientY;
@@ -608,13 +734,17 @@ function onOverlayMouseMove(e) {
   const clientY = e.clientY;
 
   if (interaction.mode === InteractionMode.NONE) {
-    // Update cursor based on what's under the mouse
-    const handleId = maskingOverlay.findHandleAtPoint(clientX, clientY);
-    if (handleId) {
-      overlayCanvas.style.cursor = MaskingOverlay.cursorForHandle(handleId);
+    // Update cursor based on what's under the mouse (only if editable)
+    if (docStatusManager.isEditable()) {
+      const handleId = maskingOverlay.findHandleAtPoint(clientX, clientY);
+      if (handleId) {
+        overlayCanvas.style.cursor = MaskingOverlay.cursorForHandle(handleId);
+      } else {
+        const region = maskingOverlay.findRegionAtPoint(clientX, clientY);
+        overlayCanvas.style.cursor = region ? "move" : "crosshair";
+      }
     } else {
-      const region = maskingOverlay.findRegionAtPoint(clientX, clientY);
-      overlayCanvas.style.cursor = region ? "move" : "crosshair";
+      overlayCanvas.style.cursor = "default";
     }
     return;
   }
@@ -827,6 +957,7 @@ async function onOverlayMouseUp(e) {
  * Perform undo of the last operation.
  */
 async function performUndo() {
+  if (!docStatusManager.isEditable()) return;
   const op = undoManager.pop();
   if (!op) return;
 
@@ -876,6 +1007,7 @@ async function performUndo() {
  */
 async function deleteSelectedRegion() {
   if (!maskingOverlay || !maskingOverlay.selectedRegionId) return;
+  if (!docStatusManager.isEditable()) return;
 
   const regionId = maskingOverlay.selectedRegionId;
   const pageNum = pdfViewer.currentPage;
@@ -907,6 +1039,7 @@ async function deleteSelectedRegion() {
  */
 async function toggleSelectedRegion() {
   if (!maskingOverlay || !maskingOverlay.selectedRegionId) return;
+  if (!docStatusManager.isEditable()) return;
 
   const regionId = maskingOverlay.selectedRegionId;
   const pageNum = pdfViewer.currentPage;
@@ -1019,6 +1152,7 @@ function initPdfViewer() {
     // Update sidebar and watermark
     updateSidebarRegions();
     updateWatermark();
+    docStatusManager.refresh();
 
     // Auto fit to width
     requestAnimationFrame(() => {
@@ -1330,6 +1464,11 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
 }
 
 async function openPdfFile() {
+  // Block file open when a document is already loaded
+  if (docStatusManager.getStatus()) {
+    return;
+  }
+
   let result = null;
 
   if (isTauri) {
@@ -1390,6 +1529,73 @@ document.addEventListener("DOMContentLoaded", () => {
   // Footer toolbar All ON / All OFF
   const btnToolbarAllOn = document.getElementById("btn-toolbar-all-on");
   const btnToolbarAllOff = document.getElementById("btn-toolbar-all-off");
+
+  // --- Confirm / Rollback / Finalize buttons ---
+  const btnConfirm = document.getElementById("btn-confirm");
+  const btnRollback = document.getElementById("btn-rollback");
+  const btnFinalize = document.getElementById("btn-finalize");
+
+  btnConfirm.addEventListener("click", async () => {
+    if (!docStatusManager.canConfirm()) return;
+    try {
+      await invoke("confirm_document", { user: null }); // null = use OS login name
+      await docStatusManager.refresh();
+      await updateWatermark();
+      await updateSidebarRegions();
+    } catch (e) {
+      console.error("Failed to confirm document:", e);
+      alert("確認に失敗しました: " + e);
+    }
+  });
+
+  btnRollback.addEventListener("click", async () => {
+    if (!docStatusManager.canRollback()) return;
+    try {
+      await invoke("rollback_document", { user: null });
+      await docStatusManager.refresh();
+      await updateWatermark();
+      await updateSidebarRegions();
+    } catch (e) {
+      console.error("Failed to rollback document:", e);
+      alert("差し戻しに失敗しました: " + e);
+    }
+  });
+
+  btnFinalize.addEventListener("click", async () => {
+    if (!docStatusManager.canFinalize()) return;
+    // Confirmation dialog (actual finalization will be implemented in Task 18)
+    const confirmed = confirm(
+      "確定マスキング処理を実行しますか？\n\n" +
+      "この操作は元に戻せません。\n" +
+      "黒塗りがPDFに焼き込まれ、安全なPDFが生成されます。"
+    );
+    if (!confirmed) return;
+    try {
+      await invoke("finalize_document", { user: null });
+      await docStatusManager.refresh();
+      await updateWatermark();
+      await updateSidebarRegions();
+    } catch (e) {
+      console.error("Failed to finalize document:", e);
+      alert("確定処理に失敗しました: " + e);
+    }
+  });
+
+  // Block print via beforeprint event
+  window.addEventListener("beforeprint", (e) => {
+    if (docStatusManager.getStatus() !== "finalized") {
+      e.preventDefault();
+      alert("確定済みのドキュメントのみ印刷可能です。");
+    }
+  });
+
+  // Block Ctrl+P at the window level (additional safeguard)
+  window.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.key === "p") {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
 
   btnToolbarAllOn.addEventListener("click", async () => {
     if (!isTauri) {
@@ -1496,9 +1702,10 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("mousemove", onOverlayMouseMove);
   window.addEventListener("mouseup", onOverlayMouseUp);
 
-  // Double-click to toggle ON/OFF
+  // Double-click to toggle ON/OFF (only in editable state)
   overlayCanvas.addEventListener("dblclick", (e) => {
     if (!maskingOverlay) return;
+    if (!docStatusManager.isEditable()) return;
     const region = maskingOverlay.findRegionAtPoint(e.clientX, e.clientY);
     if (region) {
       maskingOverlay.setSelectedRegion(region.id);
@@ -1511,6 +1718,8 @@ document.addEventListener("DOMContentLoaded", () => {
   pdfContainer.addEventListener("dragover", (e) => {
     e.preventDefault();
     e.stopPropagation();
+    // Block drag-over visual feedback when document is already loaded
+    if (docStatusManager.getStatus()) return;
     pdfContainer.classList.add("drag-over");
   });
 
@@ -1524,6 +1733,11 @@ document.addEventListener("DOMContentLoaded", () => {
     e.preventDefault();
     e.stopPropagation();
     pdfContainer.classList.remove("drag-over");
+
+    // Block drop when document is already loaded (draft/confirmed/finalized)
+    if (docStatusManager.getStatus()) {
+      return;
+    }
 
     const file = e.dataTransfer.files[0];
     if (!file) return;
@@ -1549,17 +1763,33 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // Ctrl+O: Open file
+    // Ctrl+O: Open file (blocked when document is in confirmed/finalized state)
     if (e.ctrlKey && e.key === "o") {
       e.preventDefault();
-      openPdfFile();
+      if (!docStatusManager.getStatus()) {
+        openPdfFile();
+      }
       return;
     }
 
-    // Ctrl+Z: Undo
+    // Ctrl+P: Block print in draft/confirmed states
+    if (e.ctrlKey && e.key === "p") {
+      e.preventDefault();
+      return;
+    }
+
+    // Ctrl+S: Block save in draft/confirmed states
+    if (e.ctrlKey && e.key === "s") {
+      e.preventDefault();
+      return;
+    }
+
+    // Ctrl+Z: Undo (only in editable state)
     if (e.ctrlKey && !e.shiftKey && e.key === "z") {
       e.preventDefault();
-      performUndo();
+      if (docStatusManager.isEditable()) {
+        performUndo();
+      }
       return;
     }
 
@@ -1572,17 +1802,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (!pdfViewer.isLoaded) return;
 
-    // Delete / Backspace: Delete selected region
+    // Delete / Backspace: Delete selected region (only in editable state)
     if (e.key === "Delete" || e.key === "Backspace") {
       e.preventDefault();
-      deleteSelectedRegion();
+      if (docStatusManager.isEditable()) {
+        deleteSelectedRegion();
+      }
       return;
     }
 
-    // Space: Toggle selected region ON/OFF
+    // Space: Toggle selected region ON/OFF (only in editable state)
     if (e.key === " " && !e.ctrlKey && !e.shiftKey) {
       e.preventDefault();
-      toggleSelectedRegion();
+      if (docStatusManager.isEditable()) {
+        toggleSelectedRegion();
+      }
       return;
     }
 
@@ -1884,6 +2118,8 @@ document.addEventListener("DOMContentLoaded", () => {
       docResult.textContent = "Document confirmed";
       await refreshDocStatus();
       await updateWatermark();
+      await docStatusManager.refresh();
+      await updateSidebarRegions();
     } catch (e) {
       docResult.textContent = "Error: " + e;
     }
@@ -1895,6 +2131,8 @@ document.addEventListener("DOMContentLoaded", () => {
       docResult.textContent = "Document rolled back to draft";
       await refreshDocStatus();
       await updateWatermark();
+      await docStatusManager.refresh();
+      await updateSidebarRegions();
     } catch (e) {
       docResult.textContent = "Error: " + e;
     }
@@ -1906,6 +2144,8 @@ document.addEventListener("DOMContentLoaded", () => {
       docResult.textContent = "Document finalized";
       await refreshDocStatus();
       await updateWatermark();
+      await docStatusManager.refresh();
+      await updateSidebarRegions();
     } catch (e) {
       docResult.textContent = "Error: " + e;
     }

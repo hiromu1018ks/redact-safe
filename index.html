@@ -99,7 +99,9 @@
           <button id="btn-toolbar-all-on" disabled>全てON</button>
           <button id="btn-toolbar-all-off" disabled>全てOFF</button>
           <span id="status-display">未読込</span>
-          <button id="btn-finalize" disabled>確定して出力</button>
+          <button id="btn-confirm" style="display:none" title="確認承認：マスキング内容を確定する前に確認します">確認</button>
+          <button id="btn-rollback" style="display:none" title="差し戻し：確認を取り消して編集可能に戻します">差し戻し</button>
+          <button id="btn-finalize" disabled title="確定して出力：黒塗りをPDFに焼き込み安全なPDFを生成します（不可逆）">確定して出力</button>
         </div>
         <!-- Progress Bar (shown during OCR/detection processing) -->
         <div id="progress-container" style="display:none">

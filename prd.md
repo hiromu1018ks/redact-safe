@@ -390,7 +390,7 @@ Tauri Desktop App
       "finalized状態では安全PDFのファイルパスのみ公開し元PDFのパスは非公開",
       "状態遷移時にログ記録されることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

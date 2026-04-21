@@ -3,7 +3,7 @@ mod document_state;
 mod python_worker;
 
 use audit_log::{AuditLogger, AuditRecord};
-use document_state::{MaskingDocument, Region};
+use document_state::{DocumentStatus, MaskingDocument, Region};
 use python_worker::{PingResponse, PythonWorker, WorkerStatus};
 use std::sync::Mutex;
 use tauri::{Emitter, State};
@@ -299,26 +299,135 @@ fn set_all_regions_enabled(
 
 /// Transition document to confirmed status.
 #[tauri::command]
-fn confirm_document(state: State<DocumentState>, user: String) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let doc = guard.as_mut().ok_or("No document loaded")?;
-    doc.confirm(&user)
+fn confirm_document(
+    _app_handle: tauri::AppHandle,
+    state: State<DocumentState>,
+    audit: State<AuditState>,
+    user: String,
+) -> Result<(), String> {
+    let doc_id;
+    {
+        let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let doc = guard.as_mut().ok_or("No document loaded")?;
+        doc_id = doc.document_id.clone();
+        doc.confirm(&user)?;
+    }
+    // Log audit event outside the lock
+    let logger = audit.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    logger.log_event(
+        "document_confirmed",
+        &user,
+        Some(&doc_id),
+        Some(serde_json::json!({"action": "confirmed"})),
+    )?;
+    Ok(())
 }
 
 /// Rollback document from confirmed to draft.
 #[tauri::command]
-fn rollback_document(state: State<DocumentState>, user: String) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let doc = guard.as_mut().ok_or("No document loaded")?;
-    doc.rollback(&user)
+fn rollback_document(
+    _app_handle: tauri::AppHandle,
+    state: State<DocumentState>,
+    audit: State<AuditState>,
+    user: String,
+) -> Result<(), String> {
+    let doc_id;
+    {
+        let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let doc = guard.as_mut().ok_or("No document loaded")?;
+        doc_id = doc.document_id.clone();
+        doc.rollback(&user)?;
+    }
+    let logger = audit.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    logger.log_event(
+        "document_rolled_back",
+        &user,
+        Some(&doc_id),
+        Some(serde_json::json!({"action": "rolled_back"})),
+    )?;
+    Ok(())
 }
 
 /// Transition document to finalized status.
 #[tauri::command]
-fn finalize_document(state: State<DocumentState>, user: String) -> Result<(), String> {
+fn finalize_document(
+    _app_handle: tauri::AppHandle,
+    state: State<DocumentState>,
+    audit: State<AuditState>,
+    user: String,
+) -> Result<(), String> {
+    let doc_id;
+    {
+        let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let doc = guard.as_mut().ok_or("No document loaded")?;
+        doc_id = doc.document_id.clone();
+        doc.finalize(&user)?;
+    }
+    let logger = audit.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    logger.log_event(
+        "document_finalized",
+        &user,
+        Some(&doc_id),
+        Some(serde_json::json!({"action": "finalized"})),
+    )?;
+    Ok(())
+}
+
+/// Set the output file path for the finalized safe PDF.
+#[tauri::command]
+fn set_output_file(state: State<DocumentState>, path: String) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     let doc = guard.as_mut().ok_or("No document loaded")?;
-    doc.finalize(&user)
+    doc.set_output_file(&path);
+    Ok(())
+}
+
+/// Get document info with source_file hidden in finalized state.
+#[tauri::command]
+fn get_document_safe(state: State<DocumentState>) -> Result<Option<serde_json::Value>, String> {
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    match guard.as_ref() {
+        Some(doc) => {
+            let mut json = serde_json::to_value(doc)
+                .map_err(|e| format!("Failed to serialize document: {}", e))?;
+            // In finalized state, hide source_file
+            if doc.status == DocumentStatus::Finalized {
+                if let Some(obj) = json.as_object_mut() {
+                    obj.remove("source_file");
+                }
+            }
+            Ok(Some(json))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Get document summary. In finalized state, hides source_file and shows output_file.
+#[tauri::command]
+fn get_document_summary_safe(state: State<DocumentState>) -> Result<Option<serde_json::Value>, String> {
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    match guard.as_ref() {
+        Some(doc) => {
+            let mut summary = serde_json::json!({
+                "document_id": doc.document_id,
+                "status": doc.status.as_str(),
+                "revision": doc.revision,
+                "confirmed_by": doc.confirmed_by,
+                "finalized_by": doc.finalized_by,
+                "page_count": doc.pages.len(),
+                "total_regions": doc.total_regions_count(),
+                "enabled_regions": doc.enabled_regions_count(),
+            });
+            if doc.status == DocumentStatus::Draft || doc.status == DocumentStatus::Confirmed {
+                summary["source_file"] = serde_json::json!(doc.source_file);
+            }
+            if doc.status == DocumentStatus::Finalized {
+                summary["output_file"] = serde_json::json!(doc.output_file);
+            }
+            Ok(Some(summary))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Save document to a JSON file.
@@ -753,6 +862,9 @@ pub fn run() {
             confirm_document,
             rollback_document,
             finalize_document,
+            set_output_file,
+            get_document_safe,
+            get_document_summary_safe,
             save_document,
             load_document,
             get_document_summary,

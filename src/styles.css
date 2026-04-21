@@ -495,6 +495,101 @@ footer {
   text-align: center;
   font-size: 13px;
   color: #666;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+#status-display .status-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.status-badge.badge-draft {
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffc107;
+}
+
+.status-badge.badge-confirmed {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #28a745;
+}
+
+.status-badge.badge-finalized {
+  background: #cce5ff;
+  color: #004085;
+  border: 1px solid #007bff;
+}
+
+/* Confirm / Rollback buttons */
+#btn-confirm {
+  padding: 4px 12px;
+  border: 1px solid #28a745;
+  border-radius: 4px;
+  background: #28a745;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#btn-confirm:hover:not(:disabled) {
+  background: #218838;
+}
+
+#btn-confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#btn-rollback {
+  padding: 4px 12px;
+  border: 1px solid #fd7e14;
+  border-radius: 4px;
+  background: #fff;
+  color: #fd7e14;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#btn-rollback:hover:not(:disabled) {
+  background: #fff3e0;
+}
+
+#btn-rollback:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#btn-finalize {
+  padding: 4px 12px;
+  border: 1px solid #dc3545;
+  border-radius: 4px;
+  background: #dc3545;
+  color: #fff;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+#btn-finalize:hover:not(:disabled) {
+  background: #c82333;
+}
+
+/* Overlay disabled state */
+#overlay-canvas.interaction-disabled {
+  cursor: not-allowed !important;
+}
+
+/* Warning banner hidden in finalized state */
+#warning-banner.hidden {
+  display: none;
 }
 
 /* Progress Bar */

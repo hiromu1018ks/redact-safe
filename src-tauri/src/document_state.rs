@@ -28,6 +28,16 @@ impl DocumentStatus {
         matches!(self, DocumentStatus::Draft)
     }
 
+    /// Returns true if the document can be confirmed (draft → confirmed).
+    pub fn can_confirm(&self) -> bool {
+        matches!(self, DocumentStatus::Draft)
+    }
+
+    /// Returns true if the document can be rolled back (confirmed → draft).
+    pub fn can_rollback(&self) -> bool {
+        matches!(self, DocumentStatus::Confirmed)
+    }
+
     /// Returns true if the document can be finalized.
     pub fn can_finalize(&self) -> bool {
         matches!(self, DocumentStatus::Confirmed)
@@ -177,6 +187,8 @@ pub struct MaskingDocument {
     pub confirmed_by: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finalized_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_file: Option<String>,
     pub coordinate_system: CoordinateSystem,
     #[serde(default)]
     pub history: Vec<HistoryEntry>,
@@ -195,6 +207,7 @@ impl MaskingDocument {
             revision: 1,
             confirmed_by: None,
             finalized_by: None,
+            output_file: None,
             coordinate_system: CoordinateSystem::default(),
             history: Vec::new(),
             pages: Vec::new(),
@@ -362,6 +375,11 @@ impl MaskingDocument {
             details: None,
         });
         Ok(())
+    }
+
+    /// Set the output file path for the finalized safe PDF.
+    pub fn set_output_file(&mut self, path: &str) {
+        self.output_file = Some(path.to_string());
     }
 
     // --- File I/O ---

@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 15 / 25
-**Current Task:** Task 15 - 検出一覧サイドバーパネル・一括操作・フィルタリング・ウォーターマークを実装する (完了)
+**Tasks Completed:** 16 / 25
+**Current Task:** Task 16 - ドキュメント状態管理（draft/confirmed/finalized）と状態遷移制約を実装する (完了)
 
 ---
 
@@ -621,3 +621,51 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** ブラウザでの視覚確認は権限未承認のため未実施。ウォーターマークのfinalized状態での非表示はTauri環境での動作確認が必要。
+
+### 2026-04-21 - Task 16: ドキュメント状態管理（draft/confirmed/finalized）と状態遷移制約を実装する
+
+**変更内容:**
+- `src-tauri/src/document_state.rs` 更新
+  - `DocumentStatus` に `can_confirm()`, `can_rollback()` ヘルパーメソッドを追加
+  - `MaskingDocument` に `output_file: Option<String>` フィールドを追加（確定後の安全PDFパス格納用）
+  - `set_output_file()` メソッドを追加
+- `src-tauri/src/lib.rs` 更新
+  - `confirm_document`, `rollback_document`, `finalize_document` コマンドに監査ログ記録を追加（`AuditState`へのアクセス）
+  - 各状態遷移時に `document_confirmed`, `document_rolled_back`, `document_finalized` イベントを監査ログに記録
+  - `set_output_file` Tauriコマンドを追加
+  - `get_document_safe` Tauriコマンドを追加（finalized状態でsource_fileを非公開）
+  - `get_document_summary_safe` Tauriコマンドを追加（finalizedでoutput_fileを公開、draft/confirmedでsource_fileを公開）
+  - `DocumentStatus` をインポート、invoke_handlerに3つの新コマンドを登録
+- `index.html` 更新
+  - フッターツールバーに「確認」「差し戻し」ボタンを追加（状態に応じて表示/非表示切替）
+  - 「確定して出力」ボタンのtitle属性を追加
+- `src/styles.css` 更新
+  - ステータスバッジスタイル追加（badge-draft: 黄色, badge-confirmed: 緑色, badge-finalized: 青色）
+  - 「確認」「差し戻し」「確定して出力」ボタンのスタイル定義
+  - `#overlay-canvas.interaction-disabled` クラス追加（confirmed/finalized時のカーソル変更）
+  - `#warning-banner.hidden` クラス追加（finalized状態で警告バナー非表示）
+- `src/main.js` 大幅更新
+  - `docStatusManager` オブジェクトを実装
+    - `refresh()`: バックエンドからドキュメント状態を取得して全UIを更新
+    - `isEditable()`, `canConfirm()`, `canRollback()`, `canFinalize()` 状態チェック
+    - `updateUI()`: ステータスバッジ表示、確認/差し戻し/確定ボタンの表示切替、編集コントロールの有効/無効化、オーバーレイのinteracton-disabledクラス切替、警告バナーの表示/非表示
+  - `onOverlayMouseDown()`: 非編集状態で操作をブロック
+  - `onOverlayMouseMove()`: 非編集状態で編集カーソル非表示
+  - `performUndo()`, `deleteSelectedRegion()`, `toggleSelectedRegion()`: 非編集状態で実行ブロック
+  - `openPdfFile()`: ドキュメント読込済みの場合に新規ファイルオープンをブロック
+  - ドラッグ&ドロップ: ドキュメント読込済みの場合にドロップをブロック（dragover visual feedbackも抑制）
+  - キーボードショートカット: Ctrl+O(ファイルオープン), Ctrl+P(印刷), Ctrl+S(保存), Delete/Backspace(削除), Space(ON/OFF切替), Ctrl+Z(Undo) を非編集状態でブロック
+  - `beforeprint` イベントリスナー: draft/confirmed状態での印刷をブロック
+  - 確認/差し戻し/確定ボタンのクリックハンドラーを実装（状態遷移後にdocStatusManager.refresh() + updateWatermark() + updateSidebarRegions()を呼出）
+  - デバッグパネルの確認/差し戻し/確定ボタンにdocStatusManager.refresh()を追加
+  - PDF読込時(onLoad)にdocStatusManager.refresh()を追加
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo test` (src-tauri/) - 成功 (12 tests passed)
+- `npm run build` - 成功
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** ブラウザでの動作確認は権限未承認のため未実施。Tauri環境での状態遷移・UI制御の統合テストが必要。
