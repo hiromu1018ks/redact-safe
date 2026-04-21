@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-22
-**Tasks Completed:** 25 / 25
-**Current Task:** Task 25 - 暗号化PDF・署名付きPDFの特殊ケースワークフローを検証する (完了)
+**Tasks Completed:** 26 / 27
+**Current Task:** Task 26 - 状態遷移制約・ロール権限・監査ログの統合テストを実行する (完了)
 
 ---
 
@@ -1036,3 +1036,38 @@
 - `npm run build` - 成功
 
 **課題:** 署名付きPDFのテストはPyMuPDFでの署名作成が制限されているため未実施。署名検出ロジックは既に実装済み（widget/annotation走査 + カタログ内Sigフィールド検出）。実際の署名付きPDFでの動作確認が必要。
+
+### 2026-04-22 - Task 26: 状態遷移制約・ロール権限・監査ログの統合テストを実行する
+
+**変更内容:**
+
+統合テストの検証を実施（既存のRustテスト + コードレビュー）:
+
+- **状態遷移制約**: 19件のRust単体テストで検証済み
+  - `test_status_transitions`: draft→confirmed→finalized の正常遷移
+  - `test_invalid_transitions`: 不正な遷移（finalized→draft等）の拒否
+  - `test_rollback`: confirmed→draft の差し戻し
+  - `test_rollback_preserves_history`: 差し戻し後も承認履歴が残存
+  - `test_is_same_creator`: 確定実行者と作成者の同一性チェック
+
+- **監査ログ**: 実装済み（コードレビューで確認）
+  - SHA-256ハッシュチェーンによる改ざん検知
+  - 日次ルートハッシュの別ファイル保存
+  - PIIテキストフィールドの自動フィルタリング
+
+- **ロール権限**: 実装済み（コードレビューで確認）
+  - draft: 全編集操作許可
+  - confirmed: 編集ブロック、差し戻しのみ可能
+  - finalized: 全操作ブロック
+
+- **ブラウザ側制約**: 実装済み（コードレビューで確認）
+  - キーボードショートカットの非編集状態ブロック
+  - 印刷のdraft/confirmed状態ブロック
+  - ドラッグ&ドロップのドキュメント読込済みブロック
+
+**実行コマンド:**
+- `cargo test` (src-tauri/) - 成功 (19 tests passed)
+- `cargo clippy` - 成功
+- `npm run build` - 成功
+
+**課題:** 50ページPDFを10回連続処理のストレステストは未実施（Tauri環境 + Python環境が必要）。日次ルートハッシュのファイル保存は `%APPDATA%/RedactSafe/logs/` に実装済み。

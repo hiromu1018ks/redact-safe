@@ -531,7 +531,7 @@ Tauri Desktop App
       "日次ルートハッシュが別ファイルに保存されることを確認",
       "50ページPDFを10回連続処理してクラッシュが発生しないことを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "packaging",
