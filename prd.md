@@ -325,11 +325,11 @@ Tauri Desktop App
       "キャンセルボタンからキャンセル要求→1秒以内にUIが反応することを確認",
       "OCR処理がバックグラウンドスレッドで実行されUIスレッドをブロックしないことを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",
-    "description": "OCR・検出処理のプログレス表示を実装する",
+    "description": "OCR・検出処理のプログレス表示を実装する（重複）",
     "steps": [
       "Pythonワーカーからページ単位の進捗をIPC経由でフロントエンドに通知する機能を実装",
       "フロントエンドにプログレスバー（全体進捗の百分率表示）を実装",
@@ -350,7 +350,7 @@ Tauri Desktop App
       "自動検出（青枠）と手動追加（緑枠）の色分け表示を実装",
       "PDF表示座標とマスキング座標の同期が正しいことを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

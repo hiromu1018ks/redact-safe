@@ -209,15 +209,29 @@ main {
   justify-content: flex-start;
 }
 
-#pdf-canvas {
-  display: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-  background: #fff;
+/* Canvas Wrapper - holds PDF canvas and overlay canvas together */
+#canvas-wrapper {
+  position: relative;
   flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  display: none;
 }
 
-#pdf-canvas.visible {
+#canvas-wrapper.visible {
+  display: inline-block;
+}
+
+#pdf-canvas {
   display: block;
+  background: #fff;
+}
+
+/* Overlay canvas - positioned on top of PDF canvas */
+#overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  cursor: default;
 }
 
 #pdf-placeholder {

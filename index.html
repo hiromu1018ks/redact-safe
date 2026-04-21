@@ -48,7 +48,10 @@
             </div>
           </div>
           <div id="pdf-container">
-            <canvas id="pdf-canvas"></canvas>
+            <div id="canvas-wrapper">
+              <canvas id="pdf-canvas"></canvas>
+              <canvas id="overlay-canvas"></canvas>
+            </div>
             <p id="pdf-placeholder">
               ファイルをドラッグ＆ドロップ、または「PDFを開く」ボタンからPDFを選択してください
             </p>
@@ -136,6 +139,21 @@
           <div class="worker-test-row">
             <label>Result:</label>
             <span id="doc-result" class="doc-result-text"></span>
+          </div>
+        </div>
+        <div id="overlay-test-panel" class="worker-test">
+          <h3>Masking Overlay Test</h3>
+          <div class="worker-test-row">
+            <button id="btn-add-test-regions">Add Test Regions</button>
+            <button id="btn-add-manual-region">Add Manual Region</button>
+            <button id="btn-clear-overlay">Clear Overlay</button>
+            <span id="overlay-result"></span>
+          </div>
+          <div class="worker-test-row">
+            <button id="btn-toggle-test-on">Toggle ON</button>
+            <button id="btn-toggle-test-off">Toggle OFF</button>
+            <button id="btn-select-next">Select Next</button>
+            <button id="btn-deselect">Deselect</button>
           </div>
         </div>
       </div>

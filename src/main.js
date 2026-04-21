@@ -1,4 +1,5 @@
 import { PdfViewer } from "./pdf-viewer.js";
+import { MaskingOverlay } from "./masking-overlay.js";
 
 // --- Tauri API (safe access for browser fallback) ---
 const isTauri = !!window.__TAURI__;
@@ -133,9 +134,12 @@ btnCancelProgress.addEventListener("click", async () => {
 
 // --- PDF Viewer ---
 let pdfViewer = null;
+let maskingOverlay = null;
 
 // --- DOM Elements ---
 const pdfCanvas = document.getElementById("pdf-canvas");
+const overlayCanvas = document.getElementById("overlay-canvas");
+const canvasWrapper = document.getElementById("canvas-wrapper");
 const pdfPlaceholder = document.getElementById("pdf-placeholder");
 const pdfContainer = document.getElementById("pdf-container");
 const pdfFilename = document.getElementById("pdf-filename");
@@ -162,10 +166,11 @@ const btnCloseDebug = document.getElementById("btn-close-debug");
 
 function initPdfViewer() {
   pdfViewer = new PdfViewer(pdfCanvas);
+  maskingOverlay = new MaskingOverlay(overlayCanvas, pdfViewer);
 
   pdfViewer.onLoad = ({ numPages, fileName }) => {
-    // Show canvas, hide placeholder
-    pdfCanvas.classList.add("visible");
+    // Show canvas wrapper, hide placeholder
+    canvasWrapper.classList.add("visible");
     pdfPlaceholder.classList.add("hidden");
     pdfContainer.classList.add("has-pdf");
 
@@ -233,11 +238,42 @@ function initPdfViewer() {
     btnPrevPage.disabled = pageNum <= 1;
     btnNextPage.disabled = pageNum >= totalPages;
     updateStatus(pdfViewer.fileName, pageNum, totalPages);
+
+    // Sync overlay canvas size with PDF canvas
+    if (maskingOverlay) {
+      maskingOverlay.resize(pdfCanvas.width, pdfCanvas.height);
+    }
+
+    // Fetch regions for the new page from backend
+    fetchAndDisplayRegions(pageNum);
   };
 
   pdfViewer.onZoomChange = (scale) => {
     zoomLevel.textContent = Math.round(scale * 100) + "%";
   };
+}
+
+/**
+ * Fetch regions for a page from the backend and display them on the overlay.
+ */
+async function fetchAndDisplayRegions(pageNum) {
+  if (!isTauri || !maskingOverlay) return;
+  try {
+    const doc = await invoke("get_document");
+    if (!doc || !doc.pages) {
+      maskingOverlay.clear();
+      return;
+    }
+    const page = doc.pages.find((p) => p.page === pageNum);
+    if (page && page.regions && page.regions.length > 0) {
+      maskingOverlay.setRegions(page.regions);
+    } else {
+      maskingOverlay.clear();
+    }
+  } catch (e) {
+    // No document or error - clear overlay
+    maskingOverlay?.clear();
+  }
 }
 
 function updateStatus(fileName, pageNum, totalPages) {
@@ -587,15 +623,38 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Coordinate display on mouse move
-  pdfCanvas.addEventListener("mousemove", (e) => {
+  // Coordinate display on mouse move (on overlay canvas, which sits on top)
+  overlayCanvas.addEventListener("mousemove", (e) => {
     if (!pdfViewer.isLoaded) return;
     const pt = pdfViewer.screenToPdfPoint(e.clientX, e.clientY);
     coordDisplay.textContent = `${pt.x.toFixed(1)}, ${pt.y.toFixed(1)} pt`;
+
+    // Hover highlight
+    if (maskingOverlay) {
+      const region = maskingOverlay.findRegionAtPoint(e.clientX, e.clientY);
+      const regionId = region ? region.id : null;
+      maskingOverlay.setHoveredRegion(regionId);
+      overlayCanvas.style.cursor = region ? "pointer" : "default";
+    }
   });
 
-  pdfCanvas.addEventListener("mouseleave", () => {
+  overlayCanvas.addEventListener("mouseleave", () => {
     coordDisplay.textContent = "";
+    if (maskingOverlay) {
+      maskingOverlay.setHoveredRegion(null);
+      overlayCanvas.style.cursor = "default";
+    }
+  });
+
+  // Click on overlay to select a region
+  overlayCanvas.addEventListener("click", (e) => {
+    if (!maskingOverlay) return;
+    const region = maskingOverlay.findRegionAtPoint(e.clientX, e.clientY);
+    if (region) {
+      maskingOverlay.setSelectedRegion(region.id);
+    } else {
+      maskingOverlay.setSelectedRegion(null);
+    }
   });
 
   // --- Drag & Drop Support ---
@@ -970,6 +1029,146 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       docResult.textContent = "Error: " + e;
     }
+  });
+
+  // ============================================================
+  // Debug Panel: Masking Overlay Test
+  // ============================================================
+
+  const btnAddTestRegions = document.getElementById("btn-add-test-regions");
+  const btnAddManualRegion = document.getElementById("btn-add-manual-region");
+  const btnClearOverlay = document.getElementById("btn-clear-overlay");
+  const overlayResult = document.getElementById("overlay-result");
+  const btnToggleTestOn = document.getElementById("btn-toggle-test-on");
+  const btnToggleTestOff = document.getElementById("btn-toggle-test-off");
+  const btnSelectNext = document.getElementById("btn-select-next");
+  const btnDeselect = document.getElementById("btn-deselect");
+
+  // Track test regions locally for browser testing
+  let testRegions = [];
+
+  btnAddTestRegions.addEventListener("click", () => {
+    if (!maskingOverlay || !pdfViewer.isLoaded) {
+      overlayResult.textContent = "Load a PDF first";
+      return;
+    }
+    // Add several test regions at various positions on the page
+    const pageW = pdfViewer.pageWidthPt;
+    const pageH = pdfViewer.pageHeightPt;
+    const newRegions = [
+      {
+        id: generateId(),
+        bbox: [72, 72, 120, 20],
+        type: "name",
+        confidence: 0.95,
+        enabled: true,
+        source: "auto",
+        note: "",
+      },
+      {
+        id: generateId(),
+        bbox: [72, 120, 200, 16],
+        type: "address",
+        confidence: 0.88,
+        enabled: true,
+        source: "auto",
+        note: "",
+      },
+      {
+        id: generateId(),
+        bbox: [pageW - 192, 72, 120, 20],
+        type: "phone",
+        confidence: 0.91,
+        enabled: true,
+        source: "auto",
+        note: "",
+      },
+      {
+        id: generateId(),
+        bbox: [72, 200, 100, 16],
+        type: "email",
+        confidence: 0.85,
+        enabled: false,
+        source: "auto",
+        note: "",
+      },
+      {
+        id: generateId(),
+        bbox: [72, 260, 80, 20],
+        type: "name",
+        confidence: 1.0,
+        enabled: true,
+        source: "manual",
+        note: "手動追加テスト",
+      },
+    ];
+    testRegions = [...testRegions, ...newRegions];
+    maskingOverlay.setRegions(testRegions);
+    overlayResult.textContent = `Added ${newRegions.length} regions (total: ${testRegions.length})`;
+  });
+
+  btnAddManualRegion.addEventListener("click", () => {
+    if (!maskingOverlay || !pdfViewer.isLoaded) {
+      overlayResult.textContent = "Load a PDF first";
+      return;
+    }
+    // Add a manual region at a random position
+    const pageW = pdfViewer.pageWidthPt;
+    const pageH = pdfViewer.pageHeightPt;
+    const x = 72 + Math.random() * (pageW - 200);
+    const y = 72 + Math.random() * (pageH - 100);
+    const newRegion = {
+      id: generateId(),
+      bbox: [x, y, 100 + Math.random() * 100, 16 + Math.random() * 10],
+      type: "custom",
+      confidence: 1.0,
+      enabled: true,
+      source: "manual",
+      note: "手動追加",
+    };
+    testRegions.push(newRegion);
+    maskingOverlay.setRegions(testRegions);
+    maskingOverlay.setSelectedRegion(newRegion.id);
+    overlayResult.textContent = `Manual region added: ${newRegion.id}`;
+  });
+
+  btnClearOverlay.addEventListener("click", () => {
+    if (!maskingOverlay) return;
+    testRegions = [];
+    maskingOverlay.clear();
+    overlayResult.textContent = "Overlay cleared";
+  });
+
+  btnToggleTestOn.addEventListener("click", () => {
+    if (!maskingOverlay) return;
+    testRegions.forEach((r) => (r.enabled = true));
+    maskingOverlay.setRegions(testRegions);
+    overlayResult.textContent = "All regions ON";
+  });
+
+  btnToggleTestOff.addEventListener("click", () => {
+    if (!maskingOverlay) return;
+    testRegions.forEach((r) => (r.enabled = false));
+    maskingOverlay.setRegions(testRegions);
+    overlayResult.textContent = "All regions OFF";
+  });
+
+  btnSelectNext.addEventListener("click", () => {
+    if (!maskingOverlay || testRegions.length === 0) {
+      overlayResult.textContent = "No regions";
+      return;
+    }
+    const current = maskingOverlay.selectedRegionId;
+    const currentIdx = testRegions.findIndex((r) => r.id === current);
+    const nextIdx = (currentIdx + 1) % testRegions.length;
+    maskingOverlay.setSelectedRegion(testRegions[nextIdx].id);
+    overlayResult.textContent = `Selected: ${testRegions[nextIdx].id} (${testRegions[nextIdx].type})`;
+  });
+
+  btnDeselect.addEventListener("click", () => {
+    if (!maskingOverlay) return;
+    maskingOverlay.setSelectedRegion(null);
+    overlayResult.textContent = "Deselected";
   });
 });
 

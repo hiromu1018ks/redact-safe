@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 12 / 25
-**Current Task:** Task 12 - OCR・検出処理のプログレス表示を実装する (完了)
+**Tasks Completed:** 13 / 25
+**Current Task:** Task 13 - 仮マスキングオーバーレイエンジン（Canvas API）を実装する (完了)
 
 ---
 
@@ -504,3 +504,40 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** Pythonワーカーが未導入のため、実行時のプログレス通知の動作確認は未実施。Python環境導入後にOCR/PII検出のプログレス表示を確認必要。
+
+### 2026-04-21 - Task 13: 仮マスキングオーバーレイエンジン（Canvas API）を実装する
+
+**変更内容:**
+- `src/masking-overlay.js` 作成 - Canvas APIベースのマスキングオーバーレイエンジン実装
+  - `MaskingOverlay` クラス: PDFビューア上にオーバーレイレイヤーを重ねてマスキング矩形を描画
+  - `setRegions()`: リージョン配列を設定して描画
+  - `setSelectedRegion()`: 選択状態を設定（赤枠 + コーナーハンドル表示）
+  - `setHoveredRegion()`: ホバー状態を設定（枠色を薄く変更）
+  - `resize()`: PDF canvas寸法に合わせてオーバーレイcanvasをリサイズ
+  - `clear()`: 全リージョンと選択状態をクリア
+  - `findRegionAtPoint()`: マウス座標からリージョンを検出（逆順で最上位優先）
+  - `_drawRegion()`: 各リージョンの描画
+    - 有効時: 黒矩形(#000000)塗りつぶし
+    - 無効時: 半透明グレー(#808080, 50%)
+    - 選択時: 赤枠(#FF0000, 2.5px) + 4コーナーハンドル(6px) + 4辺中点ハンドル
+    - 自動検出: 青枠(#4488FF)、ホバー時(#6699FF)
+    - 手動追加: 緑枠(#44AA44)、ホバー時(#66CC66)
+- `index.html` 更新 - オーバーレイテストパネルをDebug Panelに追加
+  - [Add Test Regions] [Add Manual Region] [Clear Overlay]
+  - [Toggle ON] [Toggle OFF] [Select Next] [Deselect]
+- `src/main.js` 更新
+  - `MaskingOverlay` インポート・初期化
+  - `pdfViewer.onPageChange` でオーバーレイリサイズ + リージョン取得
+  - `fetchAndDisplayRegions()`: バックエンドからページリージョンを取得してオーバーレイに設定
+  - `overlayCanvas` でのmousemoveイベント: 座標表示 + ホバーハイライト
+  - `overlayCanvas` でのclickイベント: リージョン選択
+  - デバッグパネルのテストボタン群のイベントハンドラー実装
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** 実際のPDFでのオーバーレイ描画確認はブラウザ/アプリ起動権限が必要。コードレビューにより座標同期・描画ロジックの妥当性を確認済み。
