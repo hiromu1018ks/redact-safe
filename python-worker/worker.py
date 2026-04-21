@@ -20,6 +20,10 @@ from coord_utils import (
     bbox_pixel_to_pdf_point,
     rotate_bbox,
 )
+from ocr_pipeline import (
+    run_ocr_pipeline_base64,
+    run_layout_analysis_base64,
+)
 
 
 def _open_pdf(params: dict):
@@ -180,9 +184,39 @@ def handle_ping(params: dict) -> dict:
 def handle_get_version(params: dict) -> dict:
     """Return worker version and available methods."""
     return {
-        "version": "0.3.0",
+        "version": "0.4.0",
         "methods": list(HANDLERS.keys()),
     }
+
+
+def handle_run_ocr(params: dict) -> dict:
+    """Run OCR pipeline on a single page of a PDF."""
+    pdf_data_b64 = params.get("pdf_data", "")
+    page_num = params.get("page_num", 0)
+    dpi = params.get("dpi", 300)
+    password = params.get("password", "")
+
+    if not pdf_data_b64:
+        raise ValueError("pdf_data is required")
+
+    return run_ocr_pipeline_base64(
+        pdf_data_b64, page_num, dpi, password
+    )
+
+
+def handle_run_layout_analysis(params: dict) -> dict:
+    """Run layout analysis on a single page of a PDF."""
+    pdf_data_b64 = params.get("pdf_data", "")
+    page_num = params.get("page_num", 0)
+    dpi = params.get("dpi", 300)
+    password = params.get("password", "")
+
+    if not pdf_data_b64:
+        raise ValueError("pdf_data is required")
+
+    return run_layout_analysis_base64(
+        pdf_data_b64, page_num, dpi, password
+    )
 
 
 def handle_pdf_point_to_pixel(params: dict) -> dict:
@@ -240,6 +274,8 @@ HANDLERS = {
     "rotate_bbox": handle_rotate_bbox,
     "analyze_pdf": handle_analyze_pdf,
     "decrypt_pdf": handle_decrypt_pdf,
+    "run_ocr": handle_run_ocr,
+    "run_layout_analysis": handle_run_layout_analysis,
 }
 
 

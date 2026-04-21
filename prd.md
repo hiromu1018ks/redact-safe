@@ -261,7 +261,7 @@ Tauri Desktop App
       "信頼スコア < 0.5 の場合にTesseractフォールバックする機能を実装",
       "テストスキャンPDF（300dpi）でレイアウト解析・OCR結果を確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 6 / 25
-**Current Task:** Task 6 - ファイル入力機能（ファイルピッカー・ドラッグ&ドロップ・暗号化PDF・署名付きPDF） (完了)
+**Tasks Completed:** 7 / 25
+**Current Task:** Task 7 - PaddleOCRによるレイアウト解析・文字認識パイプライン (完了)
 
 ---
 
@@ -217,3 +217,38 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** Pythonワーカーが未導入のため、暗号化/署名検出の実行時テストは未実施。Python環境導入後に動作確認が必要。
+
+### 2026-04-21 - Task 7: PaddleOCRによるレイアウト解析・文字認識パイプライン
+
+**変更内容:**
+- `python-worker/ocr_pipeline.py` 作成 - OCRパイプラインモジュール実装
+  - `analyze_layout()`: PaddleOCR PPStructureによるレイアウト解析（段落・表・図・ヘッダ等の領域分類）
+  - `recognize_text_paddleocr()`: PaddleOCR文字認識によるテキスト・bbox抽出（日本語対応、angle_cls有効）
+  - `recognize_text_tesseract()`: Tesseract OCRによるフォールバック（pytesseract使用、jpn+eng対応）
+  - `run_ocr_pipeline()`: フルOCRパイプライン統合（レイアウト解析→PaddleOCR文字認識→低信頼度(< 0.5)領域にTesseractフォールバック）
+  - `_merge_ocr_results()`: PaddleOCRとTesseract結果のIoUベース統合（重複領域の高信頼度結果を採用）
+  - `_render_page_to_image()`: PyMuPDFでPDFページを指定DPIで画像化（デフォルト300dpi）
+  - `run_ocr_pipeline_base64()`: base64エンコードPDFデータからのパイプライン実行（JSON-RPC用エントリポイント）
+  - `run_layout_analysis_base64()`: base64エンコードPDFデータからのレイアウト解析（JSON-RPC用エントリポイント）
+  - 遅延初期化パターン: PaddleOCR/PPStructureエンジンの初回使用時に初期化
+  - Tesseract可用性チェック: `shutil.which("tesseract")` で実行可能バイナリ確認
+- `python-worker/worker.py` 更新
+  - `handle_run_ocr`: OCRパイプラインJSON-RPCハンドラ追加（pdf_data, page_num, dpi, password パラメータ）
+  - `handle_run_layout_analysis`: レイアウト解析JSON-RPCハンドラ追加
+  - バージョンを0.4.0に更新
+  - HANDLERSディスパッチテーブルに `run_ocr`, `run_layout_analysis` を追加
+- `python-worker/requirements.txt` 更新 - `pytesseract>=0.3.10` 追加
+- `src-tauri/src/lib.rs` 更新 - Tauriコマンド追加
+  - `run_ocr`: Pythonワーカー経由でOCRパイプライン実行（pdf_data_base64, page_num, dpi, password）
+  - `run_layout_analysis`: Pythonワーカー経由でレイアウト解析実行
+  - invoke_handlerに新コマンドを登録
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+- `npm run tauri dev` - アプリ起動成功 (localhost:1420)
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** PaddleOCR/Tesseractの実行時テストはPython環境 + モデル導入後に動作確認が必要。テストスキャンPDF（300dpi）でのレイアウト解析・OCR結果確認が保留中。

@@ -390,6 +390,58 @@ fn decrypt_pdf(
     Ok(result)
 }
 
+// --- OCR Commands ---
+
+/// Run OCR pipeline on a single page via Python worker.
+#[tauri::command]
+fn run_ocr(
+    state: State<WorkerState>,
+    pdf_data_base64: String,
+    page_num: u32,
+    dpi: Option<u32>,
+    password: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+        "page_num": page_num,
+        "dpi": dpi.unwrap_or(300),
+        "password": password.unwrap_or_default(),
+    });
+
+    let result = worker.call("run_ocr", Some(params))?;
+    Ok(result)
+}
+
+/// Run layout analysis on a single page via Python worker.
+#[tauri::command]
+fn run_layout_analysis(
+    state: State<WorkerState>,
+    pdf_data_base64: String,
+    page_num: u32,
+    dpi: Option<u32>,
+    password: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+        "page_num": page_num,
+        "dpi": dpi.unwrap_or(300),
+        "password": password.unwrap_or_default(),
+    });
+
+    let result = worker.call("run_layout_analysis", Some(params))?;
+    Ok(result)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -425,6 +477,8 @@ pub fn run() {
             get_document_summary,
             analyze_pdf,
             decrypt_pdf,
+            run_ocr,
+            run_layout_analysis,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
