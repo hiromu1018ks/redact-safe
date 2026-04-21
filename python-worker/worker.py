@@ -23,6 +23,8 @@ from coord_utils import (
 from ocr_pipeline import (
     run_ocr_pipeline_base64,
     run_layout_analysis_base64,
+    extract_text_digital_base64,
+    run_text_extraction,
 )
 
 
@@ -184,7 +186,7 @@ def handle_ping(params: dict) -> dict:
 def handle_get_version(params: dict) -> dict:
     """Return worker version and available methods."""
     return {
-        "version": "0.4.0",
+        "version": "0.5.0",
         "methods": list(HANDLERS.keys()),
     }
 
@@ -215,6 +217,35 @@ def handle_run_layout_analysis(params: dict) -> dict:
         raise ValueError("pdf_data is required")
 
     return run_layout_analysis_base64(
+        pdf_data_b64, page_num, dpi, password
+    )
+
+
+def handle_extract_text_digital(params: dict) -> dict:
+    """Extract text from a digital PDF page using PyMuPDF text layer."""
+    pdf_data_b64 = params.get("pdf_data", "")
+    page_num = params.get("page_num", 0)
+    password = params.get("password", "")
+
+    if not pdf_data_b64:
+        raise ValueError("pdf_data is required")
+
+    return extract_text_digital_base64(
+        pdf_data_b64, page_num, password
+    )
+
+
+def handle_run_text_extraction(params: dict) -> dict:
+    """Unified text extraction: digital path first, OCR fallback."""
+    pdf_data_b64 = params.get("pdf_data", "")
+    page_num = params.get("page_num", 0)
+    dpi = params.get("dpi", 300)
+    password = params.get("password", "")
+
+    if not pdf_data_b64:
+        raise ValueError("pdf_data is required")
+
+    return run_text_extraction(
         pdf_data_b64, page_num, dpi, password
     )
 
@@ -276,6 +307,8 @@ HANDLERS = {
     "decrypt_pdf": handle_decrypt_pdf,
     "run_ocr": handle_run_ocr,
     "run_layout_analysis": handle_run_layout_analysis,
+    "extract_text_digital": handle_extract_text_digital,
+    "run_text_extraction": handle_run_text_extraction,
 }
 
 

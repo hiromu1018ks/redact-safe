@@ -273,7 +273,7 @@ Tauri Desktop App
       "テキスト抽出失敗時はOCR経路にフォールバックする処理を実装",
       "デジタルPDFのテストファイルでテキスト抽出が正常動作することを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

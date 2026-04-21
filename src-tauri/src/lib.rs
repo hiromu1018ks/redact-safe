@@ -442,6 +442,54 @@ fn run_layout_analysis(
     Ok(result)
 }
 
+/// Extract text from a digital PDF page via Python worker (PyMuPDF text layer).
+#[tauri::command]
+fn extract_text_digital(
+    state: State<WorkerState>,
+    pdf_data_base64: String,
+    page_num: u32,
+    password: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+        "page_num": page_num,
+        "password": password.unwrap_or_default(),
+    });
+
+    let result = worker.call("extract_text_digital", Some(params))?;
+    Ok(result)
+}
+
+/// Unified text extraction: digital path first, OCR fallback via Python worker.
+#[tauri::command]
+fn run_text_extraction(
+    state: State<WorkerState>,
+    pdf_data_base64: String,
+    page_num: u32,
+    dpi: Option<u32>,
+    password: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+        "page_num": page_num,
+        "dpi": dpi.unwrap_or(300),
+        "password": password.unwrap_or_default(),
+    });
+
+    let result = worker.call("run_text_extraction", Some(params))?;
+    Ok(result)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -479,6 +527,8 @@ pub fn run() {
             decrypt_pdf,
             run_ocr,
             run_layout_analysis,
+            extract_text_digital,
+            run_text_extraction,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

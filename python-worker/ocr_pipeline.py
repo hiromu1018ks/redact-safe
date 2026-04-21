@@ -1,11 +1,14 @@
 """
 OCR Pipeline for RedactSafe.
 
-Provides PaddleOCR-based layout analysis and text recognition
-with Tesseract fallback for low-confidence results.
+Provides:
+- Digital PDF text extraction (PyMuPDF) for text-layer PDFs
+- PaddleOCR-based layout analysis and text recognition
+- Tesseract fallback for low-confidence OCR results
 """
 
 import io
+import uuid
 from typing import Dict, List, Optional, Tuple, Any
 
 # Lazy imports for optional dependencies
@@ -374,3 +377,187 @@ def _find_best_overlap(
                 best = cand
 
     return best
+
+
+# --- Digital PDF Text Extraction (PyMuPDF) ---
+
+
+def check_text_layer(doc, page_num: int) -> bool:
+    """Check if a PDF page has an extractable text layer.
+
+    Returns True if the page contains text content (not just images).
+    """
+    page = doc[page_num]
+    text_dict = page.get_text("dict")
+    blocks = text_dict.get("blocks", [])
+    for block in blocks:
+        if block.get("type") == 0:  # text block
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    if span.get("text", "").strip():
+                        return True
+    return False
+
+
+def extract_text_digital(
+    doc, page_num: int, rotation_deg: int = 0
+) -> Dict[str, Any]:
+    """Extract text and bounding boxes from a digital PDF using PyMuPDF.
+
+    Uses page.get_text("rawdict") to get character-level quads,
+    then groups them into text regions (lines) with bounding boxes.
+
+    Confidence is fixed at 1.0 for digital text extraction path.
+
+    Returns a dict with text_regions, extraction_path, and page info.
+    """
+    page = doc[page_num]
+
+    # Apply rotation correction to page rect
+    rect = page.rect
+    page_width_pt = round(rect.width, 2)
+    page_height_pt = round(rect.height, 2)
+
+    text_dict = page.get_text("rawdict")
+    blocks = text_dict.get("blocks", [])
+
+    text_regions = []
+    for block in blocks:
+        if block.get("type") != 0:  # skip image blocks
+            continue
+
+        block_bbox = block.get("bbox", [])  # [x0, y0, x1, y1] in PDF points
+        if not block_bbox or len(block_bbox) < 4:
+            continue
+
+        for line in block.get("lines", []):
+            line_bbox = line.get("bbox", [])  # [x0, y0, x1, y1]
+            if not line_bbox or len(line_bbox) < 4:
+                continue
+
+            # Collect text and spans for this line
+            line_text_parts = []
+            for span in line.get("spans", []):
+                span_text = span.get("text", "")
+                if span_text.strip():
+                    line_text_parts.append(span_text)
+
+            line_text = "".join(line_text_parts).strip()
+            if not line_text:
+                continue
+
+            # Calculate bbox in PDF points [x, y, width, height]
+            x0, y0, x1, y1 = line_bbox
+            bbox_pt = [
+                round(x0, 2),
+                round(y0, 2),
+                round(x1 - x0, 2),
+                round(y1 - y0, 2),
+            ]
+
+            # Get font info from first span
+            font_info = {}
+            spans = line.get("spans", [])
+            if spans:
+                first_span = spans[0]
+                font_info = {
+                    "font": first_span.get("font", ""),
+                    "size": round(first_span.get("size", 0), 2),
+                    "flags": first_span.get("flags", 0),
+                }
+
+            region_id = str(uuid.uuid4())
+
+            text_regions.append({
+                "id": region_id,
+                "bbox_pt": bbox_pt,
+                "text": line_text,
+                "confidence": 1.0,
+                "engine": "digital_extraction",
+                "font": font_info,
+                "block_bbox": [
+                    round(block_bbox[0], 2),
+                    round(block_bbox[1], 2),
+                    round(block_bbox[2] - block_bbox[0], 2),
+                    round(block_bbox[3] - block_bbox[1], 2),
+                ],
+            })
+
+    return {
+        "page": page_num + 1,
+        "extraction_path": "digital",
+        "text_regions": text_regions,
+        "has_text_layer": len(text_regions) > 0,
+        "page_width_pt": page_width_pt,
+        "page_height_pt": page_height_pt,
+        "rotation_deg": rotation_deg,
+    }
+
+
+def extract_text_digital_base64(
+    pdf_data_b64: str,
+    page_num: int,
+    password: str = "",
+) -> Dict[str, Any]:
+    """Extract text from a digital PDF page using base64-encoded data.
+
+    Entry point for JSON-RPC handler.
+    """
+    import fitz
+
+    pdf_bytes = __import__("base64").b64decode(pdf_data_b64)
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    if doc.is_encrypted and doc.needs_pass:
+        if not doc.authenticate(password):
+            doc.close()
+            raise ValueError("PDF_PASSWORD_INCORRECT")
+
+    try:
+        page = doc[page_num]
+        rotation_deg = page.rotation
+        return extract_text_digital(doc, page_num, rotation_deg)
+    finally:
+        doc.close()
+
+
+def run_text_extraction(
+    pdf_data_b64: str,
+    page_num: int,
+    dpi: int = 300,
+    password: str = "",
+) -> Dict[str, Any]:
+    """Unified text extraction: tries digital path first, falls back to OCR.
+
+    Returns a dict with extraction_path ("digital" or "ocr"), text_regions,
+    and metadata about the extraction process.
+    """
+    import fitz
+
+    pdf_bytes = __import__("base64").b64decode(pdf_data_b64)
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    if doc.is_encrypted and doc.needs_pass:
+        if not doc.authenticate(password):
+            doc.close()
+            raise ValueError("PDF_PASSWORD_INCORRECT")
+
+    try:
+        page = doc[page_num]
+        rotation_deg = page.rotation
+
+        # Step 1: Check for text layer
+        has_text = check_text_layer(doc, page_num)
+
+        if has_text:
+            # Digital extraction path
+            result = extract_text_digital(doc, page_num, rotation_deg)
+            return result
+        else:
+            # OCR fallback path
+            ocr_result = run_ocr_pipeline(doc, page_num, dpi)
+            ocr_result["extraction_path"] = "ocr"
+            ocr_result["has_text_layer"] = False
+            return ocr_result
+    finally:
+        doc.close()

@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 7 / 25
-**Current Task:** Task 7 - PaddleOCRによるレイアウト解析・文字認識パイプライン (完了)
+**Tasks Completed:** 8 / 25
+**Current Task:** Task 8 - デジタルネイティブPDFのテキスト抽出経路 (完了)
 
 ---
 
@@ -252,3 +252,32 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** PaddleOCR/Tesseractの実行時テストはPython環境 + モデル導入後に動作確認が必要。テストスキャンPDF（300dpi）でのレイアウト解析・OCR結果確認が保留中。
+
+### 2026-04-21 - Task 8: デジタルネイティブPDFのテキスト抽出経路（PyMuPDF）
+
+**変更内容:**
+- `python-worker/ocr_pipeline.py` 更新 - デジタルPDFテキスト抽出機能を実装
+  - `check_text_layer()`: PyMuPDFでページのテキストレイヤー有無を判定（`get_text("dict")`でtext block > line > spanを走査）
+  - `extract_text_digital()`: `get_text("rawdict")`で文字クワッドから行単位のテキスト・bboxを抽出（PDF point座標、confidence=1.0固定）
+  - `extract_text_digital_base64()`: base64エンコードPDFデータからのデジタルテキスト抽出（JSON-RPC用エントリポイント）
+  - `run_text_extraction()`: 統合テキスト抽出 - テキストレイヤーが存在する場合はデジタル抽出、存在しない場合はOCRパイプラインにフォールバック
+  - 各テキストリージョンにid(UUID)、bbox_pt(PDF point座標)、text、confidence(1.0)、engine("digital_extraction")、font情報、block_bboxを付与
+- `python-worker/worker.py` 更新
+  - `handle_extract_text_digital`: デジタルテキスト抽出JSON-RPCハンドラ追加
+  - `handle_run_text_extraction`: 統合テキスト抽出JSON-RPCハンドラ追加（デジタル→OCR自動フォールバック）
+  - HANDLERSディスパッチテーブルに `extract_text_digital`, `run_text_extraction` を追加
+  - バージョンを0.5.0に更新
+- `src-tauri/src/lib.rs` 更新 - Tauriコマンド追加
+  - `extract_text_digital`: Pythonワーカー経由でデジタルテキスト抽出（pdf_data_base64, page_num, password）
+  - `run_text_extraction`: Pythonワーカー経由で統合テキスト抽出（pdf_data_base64, page_num, dpi, password）
+  - invoke_handlerに新コマンドを登録
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+- `npm run tauri dev` - アプリ起動成功 (localhost:1420)
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** Pythonがシステムにインストールされていないため、デジタルPDFのテストファイルでの実行時テストは未実施。Python環境導入後に動作確認が必要。
