@@ -511,6 +511,8 @@ btnCancelProgress.addEventListener("click", async () => {
 let pdfViewer = null;
 let maskingOverlay = null;
 let undoManager = new UndoManager();
+let currentPdfPassword = "";  // Store password for encrypted PDFs
+let currentSourceFilePath = "";  // Store source PDF file path
 
 // ============================================================
 // Interaction Engine (drag / resize / draw-new)
@@ -1246,6 +1248,125 @@ const signatureDialog = document.getElementById("signature-dialog");
 const btnSignatureContinue = document.getElementById("btn-signature-continue");
 const btnSignatureCancel = document.getElementById("btn-signature-cancel");
 
+const operatorDialog = document.getElementById("operator-dialog");
+const operatorDialogTitle = document.getElementById("operator-dialog-title");
+const operatorDialogMessage = document.getElementById("operator-dialog-message");
+const operatorDialogOsUsername = document.getElementById("operator-dialog-os-username");
+const operatorDisplayName = document.getElementById("operator-display-name");
+const btnOperatorOk = document.getElementById("btn-operator-ok");
+const btnOperatorCancel = document.getElementById("btn-operator-cancel");
+
+const finalizerWarningDialog = document.getElementById("finalizer-warning-dialog");
+const btnFinalizerWarningProceed = document.getElementById("btn-finalizer-warning-proceed");
+const btnFinalizerWarningCancel = document.getElementById("btn-finalizer-warning-cancel");
+
+/** Cached OS username */
+let cachedOsUsername = null;
+
+/**
+ * Get the OS login username from the backend (cached after first call).
+ */
+async function getOsUsername() {
+  if (cachedOsUsername) return cachedOsUsername;
+  if (!isTauri) return "browser_user";
+  try {
+    cachedOsUsername = await invoke("get_os_username");
+    return cachedOsUsername;
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Show operator name input dialog.
+ * Pre-fills the display name with the OS username.
+ * @param {string} title - Dialog title
+ * @param {string} message - Dialog message
+ * @returns {Promise<{osUsername: string, displayName: string}|null>} - Operator info or null if cancelled
+ */
+async function showOperatorDialog(title, message) {
+  const osUsername = await getOsUsername();
+
+  return new Promise((resolve) => {
+    operatorDialogTitle.textContent = title;
+    operatorDialogMessage.textContent = message;
+    operatorDialogOsUsername.textContent = osUsername;
+    operatorDisplayName.value = osUsername;
+    operatorDialog.style.display = "flex";
+
+    // Focus the display name input after a short delay
+    setTimeout(() => {
+      operatorDisplayName.focus();
+      operatorDisplayName.select();
+    }, 50);
+
+    function cleanup() {
+      operatorDialog.style.display = "none";
+      btnOperatorOk.removeEventListener("click", onOk);
+      btnOperatorCancel.removeEventListener("click", onCancel);
+      operatorDisplayName.removeEventListener("keydown", onKeydown);
+    }
+
+    function onOk() {
+      const displayName = operatorDisplayName.value.trim();
+      if (!displayName) {
+        operatorDisplayName.focus();
+        return;
+      }
+      cleanup();
+      resolve({ osUsername, displayName });
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(null);
+    }
+
+    function onKeydown(e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        onOk();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    }
+
+    btnOperatorOk.addEventListener("click", onOk);
+    btnOperatorCancel.addEventListener("click", onCancel);
+    operatorDisplayName.addEventListener("keydown", onKeydown);
+  });
+}
+
+/**
+ * Show finalizer/creator match warning dialog.
+ * @returns {Promise<boolean>} - true if user wants to proceed, false to cancel
+ */
+function showFinalizerWarningDialog() {
+  return new Promise((resolve) => {
+    finalizerWarningDialog.style.display = "flex";
+
+    function cleanup() {
+      finalizerWarningDialog.style.display = "none";
+      btnFinalizerWarningProceed.removeEventListener("click", onProceed);
+      btnFinalizerWarningCancel.removeEventListener("click", onCancel);
+    }
+
+    function onProceed() {
+      cleanup();
+      resolve(true);
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(false);
+    }
+
+    btnFinalizerWarningProceed.addEventListener("click", onProceed);
+    btnFinalizerWarningCancel.addEventListener("click", onCancel);
+  });
+}
+
 function showPasswordDialog() {
   return new Promise((resolve) => {
     passwordInput.value = "";
@@ -1328,6 +1449,23 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
+/**
+ * Generate default output path for a finalized safe PDF.
+ * Format: <original_dir>/<original_name>_redacted_<YYYYMMDD_HHMMSS>.pdf
+ */
+function generateOutputPath(sourceFilePath) {
+  if (!sourceFilePath) return "document_redacted.pdf";
+  const lastSlash = Math.max(sourceFilePath.lastIndexOf("/"), sourceFilePath.lastIndexOf("\\"));
+  const dir = sourceFilePath.substring(0, lastSlash + 1);
+  const full = sourceFilePath.substring(lastSlash + 1);
+  const dotIdx = full.lastIndexOf(".");
+  const baseName = dotIdx > 0 ? full.substring(0, dotIdx) : full;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `${dir}${baseName}_redacted_${timestamp}.pdf`;
+}
+
 // --- PDF Analysis Flow ---
 
 /**
@@ -1406,6 +1544,7 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
           return;
         }
 
+        currentPdfPassword = password || "";
         const decryptResult = await decryptPdfWithWorker(arrayBuffer, password);
         if (decryptResult && decryptResult.success) {
           break;
@@ -1426,9 +1565,12 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
     // Step 4: Create document state with hash
     if (analysis.sha256) {
       try {
+        const osUsername = await getOsUsername();
         const docId = await invoke("create_document", {
           sourceFile: fileName,
           sourceHash: `sha256:${analysis.sha256}`,
+          osUsername: osUsername,
+          displayName: osUsername,
         });
         console.log("Document created:", docId);
 
@@ -1481,6 +1623,8 @@ async function openPdfFile() {
       });
       if (!filePath) return;
 
+      currentSourceFilePath = filePath;
+      currentPdfPassword = "";
       const url = window.__TAURI__.core.convertFileSrc(filePath);
       const response = await fetch(url);
       const arrayBuffer = await response.arrayBuffer();
@@ -1537,8 +1681,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnConfirm.addEventListener("click", async () => {
     if (!docStatusManager.canConfirm()) return;
+
+    // Show operator name dialog
+    const operator = await showOperatorDialog(
+      "確認承認",
+      "マスキング内容を確認し承認します。操作者の氏名を入力してください。"
+    );
+    if (!operator) return;
+
     try {
-      await invoke("confirm_document", { user: null }); // null = use OS login name
+      await invoke("confirm_document", {
+        osUsername: operator.osUsername,
+        displayName: operator.displayName,
+      });
       await docStatusManager.refresh();
       await updateWatermark();
       await updateSidebarRegions();
@@ -1550,8 +1705,19 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnRollback.addEventListener("click", async () => {
     if (!docStatusManager.canRollback()) return;
+
+    // Show operator name dialog
+    const operator = await showOperatorDialog(
+      "差し戻し",
+      "確認を取り消して編集可能な状態に戻します。操作者の氏名を入力してください。"
+    );
+    if (!operator) return;
+
     try {
-      await invoke("rollback_document", { user: null });
+      await invoke("rollback_document", {
+        osUsername: operator.osUsername,
+        displayName: operator.displayName,
+      });
       await docStatusManager.refresh();
       await updateWatermark();
       await updateSidebarRegions();
@@ -1563,20 +1729,126 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnFinalize.addEventListener("click", async () => {
     if (!docStatusManager.canFinalize()) return;
-    // Confirmation dialog (actual finalization will be implemented in Task 18)
+
+    // Show operator name dialog
+    const operator = await showOperatorDialog(
+      "確定マスキングの実行",
+      "黒塗りをPDFに焼き込み、安全なPDFを生成します。操作者の氏名を入力してください。"
+    );
+    if (!operator) return;
+
+    // Check if finalizer matches the document creator
+    if (isTauri) {
+      try {
+        const isMatch = await invoke("check_finalizer_creator_match", {
+          osUsername: operator.osUsername,
+        });
+        if (isMatch) {
+          const proceed = await showFinalizerWarningDialog();
+          if (!proceed) return;
+        }
+      } catch (e) {
+        console.warn("Failed to check finalizer/creator match:", e);
+      }
+    }
+
+    // Get document summary for confirmation dialog
+    let summary;
+    try {
+      summary = await invoke("get_document_summary");
+    } catch (e) {
+      console.error("Failed to get document summary:", e);
+      alert("ドキュメント情報の取得に失敗しました: " + e);
+      return;
+    }
+
+    const enabledRegions = summary?.enabled_regions ?? 0;
+    const pageCount = summary?.page_count ?? 0;
+
+    // Final confirmation dialog with masking counts
     const confirmed = confirm(
       "確定マスキング処理を実行しますか？\n\n" +
+      "・マスキング件数: " + enabledRegions + "件\n" +
+      "・対象ページ数: " + pageCount + "ページ\n\n" +
       "この操作は元に戻せません。\n" +
       "黒塗りがPDFに焼き込まれ、安全なPDFが生成されます。"
     );
     if (!confirmed) return;
+
     try {
-      await invoke("finalize_document", { user: null });
+      // Step 1: Generate the finalized PDF
+      progressManager.show();
+      progressMessage.textContent = "安全PDFを生成中...";
+
+      // Read source PDF as base64
+      const sourceFile = currentSourceFilePath || summary?.source_file;
+      if (!sourceFile) {
+        throw new Error("ソースPDFファイルのパスが見つかりません");
+      }
+
+      const pdfArrayBuffer = await window.__TAURI__.core.invoke("read_file_as_base64", {
+        path: sourceFile,
+      });
+      const pdfDataBase64 = pdfArrayBuffer;
+
+      // Call finalize_masking_pdf to generate the redacted PDF
+      const result = await invoke("finalize_masking_pdf", {
+        pdfDataBase64: pdfDataBase64,
+        dpi: 300,
+        marginPt: 3.0,
+        password: currentPdfPassword || null,
+      });
+
+      const finalizedPdfBase64 = result?.pdf_data;
+      if (!finalizedPdfBase64) {
+        throw new Error("PDF生成に失敗しました");
+      }
+
+      progressMessage.textContent = "安全PDFを保存中...";
+
+      // Step 2: Show file save dialog
+      const outputPath = await window.__TAURI__.dialog.save({
+        title: "安全PDFの保存",
+        defaultPath: generateOutputPath(sourceFile),
+        filters: [{ name: "PDFファイル", extensions: ["pdf"] }],
+      });
+
+      if (!outputPath) {
+        // User cancelled save
+        progressManager.hide();
+        return;
+      }
+
+      // Step 3: Save the finalized PDF to disk
+      await window.__TAURI__.core.invoke("save_base64_to_file", {
+        path: outputPath,
+        data: finalizedPdfBase64,
+      });
+
+      // Step 4: Transition document status to finalized
+      await invoke("finalize_document", {
+        osUsername: operator.osUsername,
+        displayName: operator.displayName,
+      });
+
+      // Step 5: Set output file path
+      await invoke("set_output_file", { path: outputPath });
+
+      // Step 6: Refresh UI
+      progressManager.hide();
       await docStatusManager.refresh();
       await updateWatermark();
       await updateSidebarRegions();
+
+      // Log audit event
+      logAuditEvent("document_finalized_saved", null, {
+        output_path: outputPath,
+        pages_processed: result?.pages_processed,
+        regions_masked: result?.regions_masked,
+      });
     } catch (e) {
       console.error("Failed to finalize document:", e);
+      progressManager.hide();
       alert("確定処理に失敗しました: " + e);
     }
   });
@@ -1992,9 +2264,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnCreateDoc.addEventListener("click", async () => {
     try {
+      const osUsername = await getOsUsername();
       const docId = await invoke("create_document", {
         sourceFile: "test_sample.pdf",
         sourceHash: "sha256:testhash123",
+        osUsername: osUsername,
+        displayName: osUsername,
       });
       docResult.textContent = `Created: ${docId.substring(0, 8)}...`;
       await refreshDocStatus();
@@ -2114,7 +2389,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnConfirmDoc.addEventListener("click", async () => {
     try {
-      await invoke("confirm_document", { user: "test_user" });
+      await invoke("confirm_document", { osUsername: "test_user", displayName: "テストユーザー" });
       docResult.textContent = "Document confirmed";
       await refreshDocStatus();
       await updateWatermark();
@@ -2127,7 +2402,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnRollbackDoc.addEventListener("click", async () => {
     try {
-      await invoke("rollback_document", { user: "test_user" });
+      await invoke("rollback_document", { osUsername: "test_user", displayName: "テストユーザー" });
       docResult.textContent = "Document rolled back to draft";
       await refreshDocStatus();
       await updateWatermark();
@@ -2140,7 +2415,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnFinalizeDoc.addEventListener("click", async () => {
     try {
-      await invoke("finalize_document", { user: "test_user" });
+      await invoke("finalize_document", { osUsername: "test_user", displayName: "テストユーザー" });
       docResult.textContent = "Document finalized";
       await refreshDocStatus();
       await updateWatermark();

@@ -3,7 +3,7 @@ mod document_state;
 mod python_worker;
 
 use audit_log::{AuditLogger, AuditRecord};
-use document_state::{DocumentStatus, MaskingDocument, Region};
+use document_state::{DocumentStatus, MaskingDocument, OperatorInfo, Region};
 use python_worker::{PingResponse, PythonWorker, WorkerStatus};
 use std::sync::Mutex;
 use tauri::{Emitter, State};
@@ -167,14 +167,25 @@ fn verify_log_chain(
 
 // --- Document State Commands ---
 
+/// Get the current OS username.
+#[tauri::command]
+fn get_os_username() -> String {
+    audit_log::get_current_user()
+}
+
 /// Create a new masking document for a source PDF.
 #[tauri::command]
 fn create_document(
     state: State<DocumentState>,
     source_file: String,
     source_hash: String,
+    os_username: Option<String>,
+    display_name: Option<String>,
 ) -> Result<String, String> {
-    let doc = MaskingDocument::new(&source_file, &source_hash);
+    let operator = os_username.map(|os_uname| {
+        OperatorInfo::new(&os_uname, display_name.as_deref().unwrap_or(&os_uname))
+    });
+    let doc = MaskingDocument::new(&source_file, &source_hash, operator);
     let doc_id = doc.document_id.clone();
     let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     *guard = Some(doc);
@@ -303,22 +314,28 @@ fn confirm_document(
     _app_handle: tauri::AppHandle,
     state: State<DocumentState>,
     audit: State<AuditState>,
-    user: String,
+    os_username: String,
+    display_name: String,
 ) -> Result<(), String> {
+    let operator = OperatorInfo::new(&os_username, &display_name);
     let doc_id;
     {
         let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
         let doc = guard.as_mut().ok_or("No document loaded")?;
         doc_id = doc.document_id.clone();
-        doc.confirm(&user)?;
+        doc.confirm(operator.clone())?;
     }
     // Log audit event outside the lock
     let logger = audit.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     logger.log_event(
         "document_confirmed",
-        &user,
+        &os_username,
         Some(&doc_id),
-        Some(serde_json::json!({"action": "confirmed"})),
+        Some(serde_json::json!({
+            "action": "confirmed",
+            "os_username": os_username,
+            "display_name": display_name,
+        })),
     )?;
     Ok(())
 }
@@ -329,23 +346,54 @@ fn rollback_document(
     _app_handle: tauri::AppHandle,
     state: State<DocumentState>,
     audit: State<AuditState>,
-    user: String,
+    os_username: String,
+    display_name: String,
 ) -> Result<(), String> {
+    let operator = OperatorInfo::new(&os_username, &display_name);
     let doc_id;
     {
         let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
         let doc = guard.as_mut().ok_or("No document loaded")?;
         doc_id = doc.document_id.clone();
-        doc.rollback(&user)?;
+        doc.rollback(operator.clone())?;
     }
     let logger = audit.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     logger.log_event(
         "document_rolled_back",
-        &user,
+        &os_username,
         Some(&doc_id),
-        Some(serde_json::json!({"action": "rolled_back"})),
+        Some(serde_json::json!({
+            "action": "rolled_back",
+            "os_username": os_username,
+            "display_name": display_name,
+        })),
     )?;
     Ok(())
+}
+
+/// Check if the finalizer's OS username matches the document creator or confirmer.
+/// Returns true if a warning should be shown (match detected).
+#[tauri::command]
+fn check_finalizer_creator_match(
+    state: State<DocumentState>,
+    os_username: String,
+) -> Result<bool, String> {
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_ref().ok_or("No document loaded")?;
+
+    // Warn if finalizer matches the creator (editor)
+    if doc.is_same_creator(&os_username) {
+        return Ok(true);
+    }
+
+    // Also warn if finalizer matches the confirmer (should be different person)
+    if let Some(ref confirmer) = doc.confirmed_by {
+        if confirmer.os_username == os_username {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 /// Transition document to finalized status.
@@ -354,21 +402,27 @@ fn finalize_document(
     _app_handle: tauri::AppHandle,
     state: State<DocumentState>,
     audit: State<AuditState>,
-    user: String,
+    os_username: String,
+    display_name: String,
 ) -> Result<(), String> {
+    let operator = OperatorInfo::new(&os_username, &display_name);
     let doc_id;
     {
         let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
         let doc = guard.as_mut().ok_or("No document loaded")?;
         doc_id = doc.document_id.clone();
-        doc.finalize(&user)?;
+        doc.finalize(operator.clone())?;
     }
     let logger = audit.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     logger.log_event(
         "document_finalized",
-        &user,
+        &os_username,
         Some(&doc_id),
-        Some(serde_json::json!({"action": "finalized"})),
+        Some(serde_json::json!({
+            "action": "finalized",
+            "os_username": os_username,
+            "display_name": display_name,
+        })),
     )?;
     Ok(())
 }
@@ -414,6 +468,7 @@ fn get_document_summary_safe(state: State<DocumentState>) -> Result<Option<serde
                 "revision": doc.revision,
                 "confirmed_by": doc.confirmed_by,
                 "finalized_by": doc.finalized_by,
+                "created_by": doc.created_by,
                 "page_count": doc.pages.len(),
                 "total_regions": doc.total_regions_count(),
                 "enabled_regions": doc.enabled_regions_count(),
@@ -462,6 +517,7 @@ fn get_document_summary(state: State<DocumentState>) -> Result<Option<serde_json
                 "revision": doc.revision,
                 "confirmed_by": doc.confirmed_by,
                 "finalized_by": doc.finalized_by,
+                "created_by": doc.created_by,
                 "page_count": doc.pages.len(),
                 "total_regions": doc.total_regions_count(),
                 "enabled_regions": doc.enabled_regions_count(),
@@ -831,6 +887,126 @@ fn detect_names(
     Ok(result)
 }
 
+/// Finalize masking: rasterize PDF pages, burn black rectangles, regenerate PDF via Python worker.
+/// Returns the finalized PDF as base64-encoded data.
+#[tauri::command]
+fn finalize_masking_pdf(
+    state: State<WorkerState>,
+    doc_state: State<DocumentState>,
+    pdf_data_base64: String,
+    dpi: Option<u32>,
+    margin_pt: Option<f64>,
+    password: Option<String>,
+) -> Result<serde_json::Value, String> {
+    // Collect pages and their enabled regions from document state
+    let pages_info;
+    {
+        let guard = doc_state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let doc = guard.as_ref().ok_or("No document loaded")?;
+
+        pages_info = doc.pages.iter().map(|page| {
+            let regions: Vec<serde_json::Value> = page.regions.iter().map(|r| {
+                serde_json::json!({
+                    "id": r.id,
+                    "bbox": r.bbox,
+                    "region_type": r.region_type.as_str(),
+                    "confidence": r.confidence,
+                    "enabled": r.enabled,
+                    "source": r.source.as_str(),
+                })
+            }).collect();
+
+            serde_json::json!({
+                "page_num": page.page - 1,  // Convert to 0-indexed
+                "width_pt": page.width_pt,
+                "height_pt": page.height_pt,
+                "rotation_deg": page.rotation_deg,
+                "regions": regions,
+            })
+        }).collect::<Vec<_>>();
+    }
+
+    // Call Python worker to perform the finalization
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+        "pages": pages_info,
+        "dpi": dpi.unwrap_or(300),
+        "margin_pt": margin_pt.unwrap_or(3.0),
+        "password": password.unwrap_or_default(),
+    });
+
+    let result = worker.call("finalize_masking", Some(params))?;
+    Ok(result)
+}
+
+/// Generate the output filename for a finalized safe PDF.
+/// Format: <original_filename>_redacted_<YYYYMMDD_HHMMSS>_r<revision>.pdf
+#[tauri::command]
+fn generate_output_filename(
+    state: State<DocumentState>,
+    output_dir: String,
+) -> Result<String, String> {
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_ref().ok_or("No document loaded")?;
+
+    // Extract base filename without extension
+    let source = &doc.source_file;
+    let base_name = std::path::Path::new(source)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("document");
+
+    // Generate timestamp
+    let now = chrono::Local::now();
+    let timestamp = now.format("%Y%m%d_%H%M%S");
+
+    // Build output filename with revision
+    let filename = format!("{}_redacted_{}_r{}.pdf", base_name, timestamp, doc.revision);
+    let output_path = std::path::Path::new(&output_dir).join(&filename);
+
+    // If file already exists, auto-increment
+    if output_path.exists() {
+        for i in 2..=100 {
+            let alt_filename = format!("{}_redacted_{}_r{}.pdf", base_name, timestamp, i);
+            let alt_path = std::path::Path::new(&output_dir).join(&alt_filename);
+            if !alt_path.exists() {
+                return Ok(alt_path.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    Ok(output_path.to_string_lossy().to_string())
+}
+
+/// Read a file and return its contents as a base64-encoded string.
+#[tauri::command]
+fn read_file_as_base64(path: String) -> Result<String, String> {
+    use std::fs;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+
+    let bytes = fs::read(&path).map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
+    Ok(BASE64_STANDARD.encode(&bytes))
+}
+
+/// Save base64-encoded data to a file.
+#[tauri::command]
+fn save_base64_to_file(path: String, data: String) -> Result<(), String> {
+    use std::fs;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+
+    let bytes = BASE64_STANDARD
+        .decode(&data)
+        .map_err(|e| format!("Failed to decode base64 data: {}", e))?;
+    fs::write(&path, &bytes)
+        .map_err(|e| format!("Failed to write file '{}': {}", path, e))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -850,6 +1026,8 @@ pub fn run() {
             log_event,
             get_log_dir,
             verify_log_chain,
+            get_os_username,
+            check_finalizer_creator_match,
             create_document,
             get_document,
             get_document_status,
@@ -883,6 +1061,10 @@ pub fn run() {
             validate_rules,
             check_regex_safety,
             detect_names,
+            finalize_masking_pdf,
+            generate_output_filename,
+            read_file_as_base64,
+            save_base64_to_file,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

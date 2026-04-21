@@ -404,7 +404,7 @@ Tauri Desktop App
       "編集者と確定実行者のOSログイン名が同一の場合に警告を表示する機能を実装",
       "confirmed_by/finalized_byにOSログイン名、display名を併記する機能を実装"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",
@@ -419,7 +419,7 @@ Tauri Desktop App
       "出力ファイル名規則 <元ファイル名>_redacted_<YYYYMMDD_HHMMSS>_r<revision>.pdf を実装",
       "同名ファイル存在時の自動採番（_r2, _r3...）を実装"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

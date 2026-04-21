@@ -15,6 +15,7 @@ import sys
 import json
 import hashlib
 import base64
+import io
 import traceback
 
 
@@ -221,7 +222,7 @@ def handle_ping(params: dict) -> dict:
 def handle_get_version(params: dict) -> dict:
     """Return worker version and available methods."""
     return {
-        "version": "0.8.0",
+        "version": "0.9.0",
         "methods": list(HANDLERS.keys()),
     }
 
@@ -478,6 +479,179 @@ def handle_check_regex_safety(params: dict) -> dict:
     }
 
 
+def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
+    """Finalize masking: rasterize PDF pages at 300dpi, burn black rectangles, regenerate PDF.
+
+    Args:
+        params: {
+            pdf_data: base64-encoded source PDF,
+            pages: [{page_num, width_pt, height_pt, rotation_deg, regions: [{bbox, enabled}]}],
+            dpi: rasterization DPI (default 300),
+            margin_pt: bbox margin in PDF points (default 3),
+            password: optional PDF password
+        }
+        request_id: for progress reporting
+
+    Returns:
+        {pdf_data: base64-encoded finalized PDF, pages_processed: int, regions_masked: int}
+    """
+    import fitz
+    from PIL import Image, ImageDraw
+
+    pdf_data_b64 = params.get("pdf_data", "")
+    pages_info = params.get("pages", [])
+    dpi = params.get("dpi", 300)
+    margin_pt = params.get("margin_pt", 3)
+    password = params.get("password", "")
+
+    if not pdf_data_b64:
+        raise ValueError("pdf_data is required")
+    if not pages_info:
+        raise ValueError("pages is required")
+
+    pdf_bytes = base64.b64decode(pdf_data_b64)
+    src_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    if src_doc.is_encrypted and src_doc.needs_pass:
+        if not src_doc.authenticate(password):
+            src_doc.close()
+            raise ValueError("PDF_PASSWORD_INCORRECT")
+
+    total_pages = len(pages_info)
+    total_regions_masked = 0
+
+    def _transform_bbox_for_rotation(bbox, rotation_deg, page_w_pt, page_h_pt):
+        """Transform bbox from unrotated PDF point space to rotated visual space.
+
+        When PyMuPDF renders a rotated page via get_pixmap, the output image
+        is in the rotated visual coordinate space. Our stored bboxes are in
+        the unrotated MediaBox space, so we need to transform them.
+        """
+        if rotation_deg == 0:
+            return bbox
+
+        x, y, w, h = bbox
+
+        if rotation_deg == 90:
+            # 90° CW: original → rotated
+            return [page_h_pt - y - h, x, h, w]
+        elif rotation_deg == 180:
+            return [page_w_pt - x - w, page_h_pt - y - h, w, h]
+        elif rotation_deg == 270:
+            return [y, page_w_pt - x - w, h, w]
+        return bbox
+
+    try:
+        # Create new output PDF
+        out_doc = fitz.open()
+
+        for page_info in pages_info:
+            page_num = page_info.get("page_num", 0)  # 0-indexed
+            width_pt = page_info.get("width_pt", 595.28)
+            height_pt = page_info.get("height_pt", 841.89)
+            rotation_deg = page_info.get("rotation_deg", 0)
+            regions = page_info.get("regions", [])
+
+            phase_msg = f"ページ {page_num + 1}/{total_pages} を処理中..."
+            send_progress(request_id, "rasterizing", page_num + 1, total_pages, phase_msg)
+
+            # Step 1: Rasterize page at specified DPI
+            page = src_doc[page_num]
+            zoom = dpi / 72.0
+            mat = fitz.Matrix(zoom, zoom)
+            pix = page.get_pixmap(matrix=mat, alpha=False)
+            img_data = pix.tobytes("png")
+            img = Image.open(io.BytesIO(img_data)).convert("RGB")
+
+            send_progress(request_id, "burning_rectangles", page_num + 1, total_pages,
+                          f"ページ {page_num + 1}/{total_pages} の黒塗り焼き込み中...")
+
+            # Step 2: Draw black rectangles for enabled regions
+            draw = ImageDraw.Draw(img)
+            page_regions_masked = 0
+
+            for region in regions:
+                if not region.get("enabled", False):
+                    continue
+
+                bbox = region.get("bbox", [0, 0, 0, 0])
+                # bbox is [x, y, width, height] in unrotated PDF points
+                x_pt, y_pt, w_pt, h_pt = bbox
+
+                # Transform bbox to rotated visual space if needed
+                x_pt, y_pt, w_pt, h_pt = _transform_bbox_for_rotation(
+                    [x_pt, y_pt, w_pt, h_pt], rotation_deg, width_pt, height_pt
+                )
+
+                # Apply margin (clamp to non-negative)
+                mx = max(0, x_pt - margin_pt)
+                my = max(0, y_pt - margin_pt)
+                mw = w_pt + 2 * margin_pt
+                mh = h_pt + 2 * margin_pt
+
+                # Convert from PDF points to pixels
+                scale = dpi / 72.0
+                x_px = mx * scale
+                y_px = my * scale
+                w_px = mw * scale
+                h_px = mh * scale
+
+                # Draw filled black rectangle
+                draw.rectangle(
+                    [x_px, y_px, x_px + w_px, y_px + h_px],
+                    fill=(0, 0, 0)
+                )
+                page_regions_masked += 1
+
+            total_regions_masked += page_regions_masked
+
+            send_progress(request_id, "adding_page", page_num + 1, total_pages,
+                          f"ページ {page_num + 1}/{total_pages} をPDFに追加中...")
+
+            # Step 3: Convert image back to PDF page
+            # Get page dimensions in points for the output page
+            page_w_pt = width_pt
+            page_h_pt = height_pt
+
+            # Handle rotation: if the page is rotated, swap dimensions
+            if rotation_deg in (90, 270):
+                page_w_pt, page_h_pt = height_pt, width_pt
+
+            # Convert image to PNG bytes for insertion
+            img_bytes_io = io.BytesIO()
+            img.save(img_bytes_io, format="PNG")
+            img_bytes = img_bytes_io.getvalue()
+
+            # Create a new page with the correct dimensions
+            out_page = out_doc.new_page(width=page_w_pt, height=page_h_pt)
+
+            # Insert the image, scaled to fill the page
+            img_rect = fitz.Rect(0, 0, page_w_pt, page_h_pt)
+            out_page.insert_image(img_rect, stream=img_bytes)
+
+            # Explicitly free memory
+            del img
+            del draw
+            img_bytes_io.close()
+            del img_bytes
+            pix = None  # Help GC
+
+        # Step 4: Save output PDF to bytes
+        send_progress(request_id, "saving", total_pages, total_pages, "安全PDFを生成中...")
+        out_bytes = out_doc.tobytes()
+        out_doc.close()
+
+        result_pdf_b64 = base64.b64encode(out_bytes).decode("ascii")
+
+        return {
+            "pdf_data": result_pdf_b64,
+            "pages_processed": total_pages,
+            "regions_masked": total_regions_masked,
+        }
+    finally:
+        src_doc.close()
+
+
 def handle_detect_names(params: dict) -> dict:
     """Detect person names in text regions using MeCab morphological analysis."""
     from name_detector import detect_names
@@ -519,6 +693,7 @@ HANDLERS = {
     "validate_rules": handle_validate_rules,
     "check_regex_safety": handle_check_regex_safety,
     "detect_names": handle_detect_names,
+    "finalize_masking": handle_finalize_masking,
 }
 
 

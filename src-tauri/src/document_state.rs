@@ -3,7 +3,25 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-const SCHEMA_VERSION: &str = "1.2";
+const SCHEMA_VERSION: &str = "1.3";
+
+/// Operator information combining OS login name and display name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperatorInfo {
+    /// OS login username (e.g. from %USERNAME% environment variable).
+    pub os_username: String,
+    /// Display name entered by the operator at confirmation time.
+    pub display_name: String,
+}
+
+impl OperatorInfo {
+    pub fn new(os_username: &str, display_name: &str) -> Self {
+        OperatorInfo {
+            os_username: os_username.to_string(),
+            display_name: display_name.to_string(),
+        }
+    }
+}
 
 /// Document status with state transition constraints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +70,15 @@ pub enum RegionSource {
     Manual,
 }
 
+impl RegionSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            RegionSource::Auto => "auto",
+            RegionSource::Manual => "manual",
+        }
+    }
+}
+
 /// Type of detected PII / sensitive information.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -64,6 +91,21 @@ pub enum RegionType {
     MyNumber,
     CorporateNumber,
     Custom(String),
+}
+
+impl RegionType {
+    pub fn as_str(&self) -> std::borrow::Cow<'static, str> {
+        match self {
+            RegionType::Name => std::borrow::Cow::Borrowed("name"),
+            RegionType::Address => std::borrow::Cow::Borrowed("address"),
+            RegionType::Phone => std::borrow::Cow::Borrowed("phone"),
+            RegionType::Email => std::borrow::Cow::Borrowed("email"),
+            RegionType::BirthDate => std::borrow::Cow::Borrowed("birthDate"),
+            RegionType::MyNumber => std::borrow::Cow::Borrowed("myNumber"),
+            RegionType::CorporateNumber => std::borrow::Cow::Borrowed("corporateNumber"),
+            RegionType::Custom(s) => std::borrow::Cow::Owned(format!("custom:{}", s)),
+        }
+    }
 }
 
 /// Coordinate system definition.
@@ -184,9 +226,11 @@ pub struct MaskingDocument {
     pub status: DocumentStatus,
     pub revision: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub confirmed_by: Option<String>,
+    pub created_by: Option<OperatorInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub finalized_by: Option<String>,
+    pub confirmed_by: Option<OperatorInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finalized_by: Option<OperatorInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_file: Option<String>,
     pub coordinate_system: CoordinateSystem,
@@ -197,7 +241,7 @@ pub struct MaskingDocument {
 
 impl MaskingDocument {
     /// Create a new masking document for the given source PDF.
-    pub fn new(source_file: &str, source_hash: &str) -> Self {
+    pub fn new(source_file: &str, source_hash: &str, operator: Option<OperatorInfo>) -> Self {
         MaskingDocument {
             schema_version: SCHEMA_VERSION.to_string(),
             document_id: uuid::Uuid::new_v4().to_string(),
@@ -205,6 +249,7 @@ impl MaskingDocument {
             source_hash: source_hash.to_string(),
             status: DocumentStatus::Draft,
             revision: 1,
+            created_by: operator,
             confirmed_by: None,
             finalized_by: None,
             output_file: None,
@@ -212,6 +257,11 @@ impl MaskingDocument {
             history: Vec::new(),
             pages: Vec::new(),
         }
+    }
+
+    /// Set the creator operator info.
+    pub fn set_created_by(&mut self, operator: OperatorInfo) {
+        self.created_by = Some(operator);
     }
 
     // --- Page operations ---
@@ -317,7 +367,7 @@ impl MaskingDocument {
     // --- Status transitions ---
 
     /// Transition from draft to confirmed.
-    pub fn confirm(&mut self, user: &str) -> Result<(), String> {
+    pub fn confirm(&mut self, operator: OperatorInfo) -> Result<(), String> {
         if self.status != DocumentStatus::Draft {
             return Err(format!(
                 "Cannot confirm from status '{}'. Only draft can be confirmed.",
@@ -325,18 +375,18 @@ impl MaskingDocument {
             ));
         }
         self.status = DocumentStatus::Confirmed;
-        self.confirmed_by = Some(user.to_string());
+        self.confirmed_by = Some(operator.clone());
         self.history.push(HistoryEntry {
             timestamp: Utc::now().to_rfc3339(),
             action: "confirmed".to_string(),
-            user: user.to_string(),
+            user: format!("{} ({})", operator.display_name, operator.os_username),
             details: None,
         });
         Ok(())
     }
 
     /// Rollback from confirmed back to draft.
-    pub fn rollback(&mut self, user: &str) -> Result<(), String> {
+    pub fn rollback(&mut self, operator: OperatorInfo) -> Result<(), String> {
         if self.status != DocumentStatus::Confirmed {
             return Err(format!(
                 "Cannot rollback from status '{}'. Only confirmed can be rolled back.",
@@ -349,7 +399,7 @@ impl MaskingDocument {
         self.history.push(HistoryEntry {
             timestamp: Utc::now().to_rfc3339(),
             action: "rolled_back".to_string(),
-            user: user.to_string(),
+            user: format!("{} ({})", operator.display_name, operator.os_username),
             details: Some(format!(
                 "Rolled back to draft, revision incremented to {}",
                 self.revision
@@ -359,7 +409,7 @@ impl MaskingDocument {
     }
 
     /// Transition from confirmed to finalized (irreversible).
-    pub fn finalize(&mut self, user: &str) -> Result<(), String> {
+    pub fn finalize(&mut self, operator: OperatorInfo) -> Result<(), String> {
         if self.status != DocumentStatus::Confirmed {
             return Err(format!(
                 "Cannot finalize from status '{}'. Only confirmed can be finalized.",
@@ -367,14 +417,23 @@ impl MaskingDocument {
             ));
         }
         self.status = DocumentStatus::Finalized;
-        self.finalized_by = Some(user.to_string());
+        self.finalized_by = Some(operator.clone());
         self.history.push(HistoryEntry {
             timestamp: Utc::now().to_rfc3339(),
             action: "finalized".to_string(),
-            user: user.to_string(),
+            user: format!("{} ({})", operator.display_name, operator.os_username),
             details: None,
         });
         Ok(())
+    }
+
+    /// Check if the given OS username matches the document creator.
+    /// Returns true if created_by is set and its os_username matches.
+    pub fn is_same_creator(&self, os_username: &str) -> bool {
+        self.created_by
+            .as_ref()
+            .map(|op| op.os_username == os_username)
+            .unwrap_or(false)
     }
 
     /// Set the output file path for the finalized safe PDF.
@@ -422,12 +481,13 @@ mod tests {
 
     #[test]
     fn test_new_document() {
-        let doc = MaskingDocument::new("test.pdf", "sha256:abc123");
-        assert_eq!(doc.schema_version, "1.2");
+        let doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
+        assert_eq!(doc.schema_version, "1.3");
         assert_eq!(doc.source_file, "test.pdf");
         assert_eq!(doc.source_hash, "sha256:abc123");
         assert_eq!(doc.status, DocumentStatus::Draft);
         assert_eq!(doc.revision, 1);
+        assert!(doc.created_by.is_none());
         assert!(doc.confirmed_by.is_none());
         assert!(doc.finalized_by.is_none());
         assert!(doc.pages.is_empty());
@@ -436,8 +496,16 @@ mod tests {
     }
 
     #[test]
+    fn test_new_document_with_operator() {
+        let op = OperatorInfo::new("jdoe", "山田太郎");
+        let doc = MaskingDocument::new("test.pdf", "sha256:abc123", Some(op.clone()));
+        assert_eq!(doc.created_by.as_ref().unwrap().os_username, "jdoe");
+        assert_eq!(doc.created_by.as_ref().unwrap().display_name, "山田太郎");
+    }
+
+    #[test]
     fn test_add_page_and_regions() {
-        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123");
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
         doc.add_page(1, 595.28, 841.89, 0, "ocr");
 
         let region = Region::new_auto(
@@ -455,7 +523,7 @@ mod tests {
 
     #[test]
     fn test_toggle_region() {
-        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123");
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
         doc.add_page(1, 595.28, 841.89, 0, "ocr");
         doc.add_region(1, Region::new_auto("r1".into(), [0.0; 4], RegionType::Name, 0.9))
             .unwrap();
@@ -473,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_remove_region() {
-        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123");
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
         doc.add_page(1, 595.28, 841.89, 0, "ocr");
         doc.add_region(1, Region::new_auto("r1".into(), [0.0; 4], RegionType::Name, 0.9))
             .unwrap();
@@ -487,7 +555,7 @@ mod tests {
 
     #[test]
     fn test_update_region_bbox() {
-        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123");
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
         doc.add_page(1, 595.28, 841.89, 0, "ocr");
         doc.add_region(1, Region::new_auto("r1".into(), [10.0, 20.0, 50.0, 30.0], RegionType::Name, 0.9))
             .unwrap();
@@ -499,7 +567,7 @@ mod tests {
 
     #[test]
     fn test_set_all_regions_enabled() {
-        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123");
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
         doc.add_page(1, 595.28, 841.89, 0, "ocr");
         doc.add_page(2, 595.28, 841.89, 0, "ocr");
         doc.add_region(1, Region::new_auto("r1".into(), [0.0; 4], RegionType::Name, 0.9)).unwrap();
@@ -519,62 +587,97 @@ mod tests {
 
     #[test]
     fn test_status_transitions() {
-        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123");
-        let user = "testuser";
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
+        let user = OperatorInfo::new("testuser", "テストユーザー");
 
         // draft → confirmed: OK
-        doc.confirm(user).unwrap();
+        doc.confirm(user.clone()).unwrap();
         assert_eq!(doc.status, DocumentStatus::Confirmed);
-        assert_eq!(doc.confirmed_by.as_deref(), Some(user));
+        assert_eq!(doc.confirmed_by.as_ref().unwrap().os_username, "testuser");
+        assert_eq!(doc.confirmed_by.as_ref().unwrap().display_name, "テストユーザー");
         assert_eq!(doc.history.len(), 1);
 
         // confirmed → finalized: OK
-        doc.finalize(user).unwrap();
+        doc.finalize(user.clone()).unwrap();
         assert_eq!(doc.status, DocumentStatus::Finalized);
-        assert_eq!(doc.finalized_by.as_deref(), Some(user));
+        assert_eq!(doc.finalized_by.as_ref().unwrap().os_username, "testuser");
         assert_eq!(doc.history.len(), 2);
 
         // finalized → any: error
-        assert!(doc.confirm(user).is_err());
-        assert!(doc.rollback(user).is_err());
+        assert!(doc.confirm(user.clone()).is_err());
+        assert!(doc.rollback(user.clone()).is_err());
         assert!(doc.finalize(user).is_err());
     }
 
     #[test]
     fn test_rollback() {
-        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123");
-        doc.confirm("reviewer").unwrap();
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
+        let reviewer = OperatorInfo::new("reviewer", "確認者");
+        doc.confirm(reviewer.clone()).unwrap();
         assert_eq!(doc.revision, 1);
 
-        doc.rollback("reviewer").unwrap();
+        doc.rollback(reviewer.clone()).unwrap();
         assert_eq!(doc.status, DocumentStatus::Draft);
         assert!(doc.confirmed_by.is_none());
         assert_eq!(doc.revision, 2);
         assert_eq!(doc.history.len(), 2);
 
         // Can confirm again
-        doc.confirm("reviewer2").unwrap();
+        let reviewer2 = OperatorInfo::new("reviewer2", "確認者2");
+        doc.confirm(reviewer2).unwrap();
         assert_eq!(doc.status, DocumentStatus::Confirmed);
     }
 
     #[test]
     fn test_invalid_transitions() {
-        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123");
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
+        let user = OperatorInfo::new("user", "ユーザー");
 
         // Cannot finalize from draft
-        assert!(doc.finalize("user").is_err());
+        assert!(doc.finalize(user.clone()).is_err());
 
         // Cannot rollback from draft
-        assert!(doc.rollback("user").is_err());
+        assert!(doc.rollback(user.clone()).is_err());
 
         // Cannot confirm from confirmed
-        doc.confirm("user").unwrap();
-        assert!(doc.confirm("user").is_err());
+        doc.confirm(user.clone()).unwrap();
+        assert!(doc.confirm(user).is_err());
+    }
+
+    #[test]
+    fn test_is_same_creator() {
+        let op = OperatorInfo::new("jdoe", "山田太郎");
+        let doc = MaskingDocument::new("test.pdf", "sha256:abc123", Some(op));
+        assert!(doc.is_same_creator("jdoe"));
+        assert!(!doc.is_same_creator("other"));
+    }
+
+    #[test]
+    fn test_rollback_preserves_history() {
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
+        let reviewer = OperatorInfo::new("reviewer", "確認者");
+        doc.confirm(reviewer.clone()).unwrap();
+        assert_eq!(doc.history.len(), 1);
+        assert_eq!(doc.history[0].action, "confirmed");
+
+        doc.rollback(reviewer.clone()).unwrap();
+        assert_eq!(doc.history.len(), 2);
+        // Original confirmation history is preserved
+        assert_eq!(doc.history[0].action, "confirmed");
+        assert_eq!(doc.history[1].action, "rolled_back");
+
+        // Confirm again — all history preserved
+        let reviewer2 = OperatorInfo::new("reviewer2", "確認者2");
+        doc.confirm(reviewer2).unwrap();
+        assert_eq!(doc.history.len(), 3);
+        assert_eq!(doc.history[0].action, "confirmed");
+        assert_eq!(doc.history[1].action, "rolled_back");
+        assert_eq!(doc.history[2].action, "confirmed");
     }
 
     #[test]
     fn test_json_roundtrip() {
-        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123");
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
         doc.add_page(1, 595.28, 841.89, 0, "ocr");
         doc.add_region(1, Region::new_auto("r1".into(), [100.0, 200.0, 50.0, 20.0], RegionType::Name, 0.92))
             .unwrap();

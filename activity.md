@@ -1,9 +1,9 @@
 # RedactSafe - Activity Log
 
 ## Current Status
-**Last Updated:** 2026-04-21
-**Tasks Completed:** 16 / 25
-**Current Task:** Task 16 - ドキュメント状態管理（draft/confirmed/finalized）と状態遷移制約を実装する (完了)
+**Last Updated:** 2026-04-22
+**Tasks Completed:** 18 / 25
+**Current Task:** Task 18 - 確定マスキング処理（300dpi画像化→黒塗り焼き込み→PDF再生成）を実装する (完了)
 
 ---
 
@@ -669,3 +669,103 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** ブラウザでの動作確認は権限未承認のため未実施。Tauri環境での状態遷移・UI制御の統合テストが必要。
+
+### 2026-04-22 - Task 17: 操作者識別・確認承認フロー・差し戻し機能を実装する
+
+**変更内容:**
+- `src-tauri/src/document_state.rs` 更新
+  - `OperatorInfo` 構造体を追加: `os_username` + `display_name` の2フィールドを持つ操作者情報
+  - `MaskingDocument` に `created_by: Option<OperatorInfo>` フィールドを追加（文書作成者の記録用）
+  - `confirmed_by` / `finalized_by` を `Option<String>` から `Option<OperatorInfo>` に変更
+  - `confirm()`, `rollback()`, `finalize()` メソッドの引数を `OperatorInfo` に変更
+  - `is_same_creator()` メソッドを追加: OSユーザー名が文書作成者と一致するかチェック
+  - schema_version を "1.2" → "1.3" に更新
+  - テスト15件追加・更新（全テスト通過）:
+    - `test_new_document_with_operator`: 作成者情報付きの文書作成テスト
+    - `test_is_same_creator`: 作成者一致チェックテスト
+    - `test_rollback_preserves_history`: 差し戻し後も履歴が残存することを確認
+    - 既存テストを `OperatorInfo` API に更新
+- `src-tauri/src/lib.rs` 更新
+  - `get_os_username` Tauriコマンド追加: OSログイン名をフロントエンドに提供
+  - `check_finalizer_creator_match` Tauriコマンド追加: 確定実行者が作成者または確認者と同一かチェック
+  - `create_document` コマンドに `os_username`, `display_name` パラメータ追加
+  - `confirm_document`, `rollback_document`, `finalize_document` コマンドの引数を `osUsername`, `displayName` に変更
+  - 監査ログに `os_username`, `display_name` を含むデータを記録
+  - `get_document_summary`, `get_document_summary_safe` に `created_by` を追加
+  - invoke_handlerに2つの新コマンドを登録（合計40コマンド）
+- `index.html` 更新 - 3つの新規モーダルダイアログ追加
+  - 操作者名入力ダイアログ (`#operator-dialog`): OSユーザー名表示 + 表示名入力、Enter/Escape対応
+  - 確定実行者警告ダイアログ (`#finalizer-warning-dialog`): 編集者と確定実行者が同一の場合に表示
+  - 赤色の「続行する」ボタン（`modal-btn-danger`）スタイル
+- `src/styles.css` 更新
+  - `.modal-btn-danger` スタイル追加（赤背景のプライマリボタン）
+  - `.modal-warning .modal-header h3` スタイル追加（警告ダイアログのタイトルを赤色に）
+- `src/main.js` 大幅更新
+  - `getOsUsername()`: OSユーザー名の取得・キャッシュ（初回呼び出し時のみバックエンドに問い合わせ）
+  - `showOperatorDialog()`: Promiseベースの操作者名入力ダイアログ（確認/差し戻し/確定で共用）
+  - `showFinalizerWarningDialog()`: 確定実行者警告ダイアログ
+  - 確認ボタン: 操作者名ダイアログ → `confirm_document` 呼び出し
+  - 差し戻しボタン: 操作者名ダイアログ → `rollback_document` 呼び出し
+  - 確定ボタン: 操作者名ダイアログ → 作成者/確認者一致チェック → 警告ダイアログ（必要時） → 確認ダイアログ → `finalize_document` 呼び出し
+  - `create_document` 呼び出しに `osUsername`, `displayName` パラメータ追加
+  - デバッグパネルのテストボタン群を新しいAPIに更新
+
+**実行コマンド:**
+- `cargo test` (src-tauri/) - 成功 (15 tests passed)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** ブラウザでのダイアログ操作テストは権限未承認のため未実施。Tauri環境での操作者名入力ダイアログ・確定警告ダイアログの動作確認が必要。
+
+### 2026-04-22 - Task 18: 確定マスキング処理（300dpi画像化→黒塗り焼き込み→PDF再生成）を実装する
+
+**変更内容:**
+- `python-worker/worker.py` 更新
+  - `handle_finalize_masking` ハンドラを追加 - JSON-RPC経由で確定マスキング処理を実行
+  - 各ページを300dpiで逐次ラスタライズ（PyMuPDF `get_pixmap`）
+  - 有効リージョンのbboxをPDF point座標からピクセル座標に変換し、最低3ptマージンを付加
+  - PIL `ImageDraw.rectangle` で黒矩形(#000000)を焼き込み
+  - ページ回転(90°/180°/270°)に対するbbox座標変換を追加（`_transform_bbox_for_rotation`）
+  - 焼き込み後の画像をPNG形式でPyMuPDFに挿入しPDFページとして出力
+  - 画像メモリの逐次解放（`del img`, `del draw`, `img_bytes_io.close()`）
+  - 進捗通知（`send_progress`）: rasterizing → burning_rectangles → adding_page → saving
+  - `io` モジュールをインポートに追加
+  - HANDLERSに `finalize_masking` を登録、バージョンを0.9.0に更新
+- `src-tauri/src/document_state.rs` 更新
+  - `RegionSource::as_str()` メソッドを追加（"auto" / "manual"）
+  - `RegionType::as_str()` メソッドを追加（各PII種別の文字列表現、`Cow<str>` 返却）
+- `src-tauri/src/lib.rs` 更新
+  - `finalize_masking_pdf` Tauriコマンド追加: ドキュメント状態から全ページの有効リージョンを収集しPythonワーカーに委譲
+  - `generate_output_filename` Tauriコマンド追加: `<元ファイル名>_redacted_<YYYYMMDD_HHMMSS>_r<revision>.pdf` 形式の出力ファイル名生成
+  - `read_file_as_base64` Tauriコマンド追加: ファイルをbase64エンコードで読込
+  - `save_base64_to_file` Tauriコマンド追加: base64データをファイルに保存
+  - `base64 = "0.22"` クレートをCargo.tomlに追加
+  - invoke_handlerに4つの新コマンドを登録（合計44コマンド）
+- `src/main.js` 大幅更新
+  - 確定ボタンのクリックハンドラーを全面改修:
+    1. 操作者名ダイアログ → 作成者/確認者一致チェック → 警告ダイアログ
+    2. 確認ダイアログにマスキング件数・対象ページ数を明示
+    3. プログレスバー表示（`progressManager.show()`）
+    4. ソースPDFをbase64で読込（`read_file_as_base64`）
+    5. `finalize_masking_pdf` で安全PDFを生成（プログレス通知受信）
+    6. ファイル保存ダイアログ表示（`@tauri-apps/plugin-dialog` `save()`）
+    7. 生成PDFをファイルに保存（`save_base64_to_file`）
+    8. ドキュメント状態をfinalizedに遷移 + 出力ファイルパス記録
+    9. UI更新（ウォーターマーク非表示・ステータス更新）
+  - `generateOutputPath()` ヘルパー関数追加: タイムスタンプ付き出力パス生成
+  - `currentPdfPassword` グローバル変数追加: 暗号化PDFのパスワードを保持
+  - `currentSourceFilePath` グローバル変数追加: ソースPDFのファイルパスを保持
+  - `loadPdfWithAnalysis()` でパスワードを `currentPdfPassword` に保存
+  - `openPdfFile()` でファイルパスを `currentSourceFilePath` に保存、パスワードをリセット
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo test` (src-tauri/) - 成功 (15 tests passed)
+- `npm run build` - 成功 (dist/ にビルド出力)
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** Pythonワーカー環境がないため、実際のPDFラスタライズ・黒塗り焼き込みの実行時テストは未実施。Tauri環境 + Python環境導入後にエンドツーエンドの動作確認が必要。
