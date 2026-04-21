@@ -213,7 +213,7 @@ def recognize_text_tesseract(
 
 
 def run_ocr_pipeline(
-    doc, page_num: int, dpi: int = 300
+    doc, page_num: int, dpi: int = 300, progress_callback=None
 ) -> Dict[str, Any]:
     """Run the full OCR pipeline on a single PDF page.
 
@@ -222,13 +222,23 @@ def run_ocr_pipeline(
     2. Text recognition (PaddleOCR)
     3. Tesseract fallback for low-confidence regions
 
-    Returns a dict with layout regions and text regions.
+    Args:
+        progress_callback: Optional callable(phase, current, total, message) for progress updates.
     """
+    if progress_callback:
+        progress_callback("layout_analysis", 0, 3, "レイアウト解析中...")
+
     # Step 1: Layout analysis
     layout_regions = analyze_layout(doc, page_num, dpi)
 
+    if progress_callback:
+        progress_callback("text_recognition", 1, 3, "文字認識中...")
+
     # Step 2: PaddleOCR text recognition
     text_regions = recognize_text_paddleocr(doc, page_num, dpi)
+
+    if progress_callback:
+        progress_callback("tesseract_check", 2, 3, "低信頼度領域を確認中...")
 
     # Step 3: Check for low-confidence regions and fall back to Tesseract
     low_conf_regions = [
@@ -238,10 +248,15 @@ def run_ocr_pipeline(
 
     tesseract_regions = []
     if low_conf_regions:
+        if progress_callback:
+            progress_callback("tesseract_fallback", 2, 3, "Tesseractフォールバック実行中...")
         tesseract_regions = recognize_text_tesseract(doc, page_num, dpi)
         # Merge: replace low-confidence PaddleOCR results with Tesseract results
         # where Tesseract has higher confidence for overlapping regions
         text_regions = _merge_ocr_results(text_regions, tesseract_regions)
+
+    if progress_callback:
+        progress_callback("ocr_complete", 3, 3, "OCR完了")
 
     return {
         "page": page_num + 1,
@@ -258,6 +273,7 @@ def run_ocr_pipeline_base64(
     page_num: int,
     dpi: int = 300,
     password: str = "",
+    progress_callback=None,
 ) -> Dict[str, Any]:
     """Run the full OCR pipeline on a page from base64-encoded PDF data.
 
@@ -274,7 +290,7 @@ def run_ocr_pipeline_base64(
             raise ValueError("PDF_PASSWORD_INCORRECT")
 
     try:
-        return run_ocr_pipeline(doc, page_num, dpi)
+        return run_ocr_pipeline(doc, page_num, dpi, progress_callback=progress_callback)
     finally:
         doc.close()
 
@@ -526,6 +542,7 @@ def run_text_extraction(
     page_num: int,
     dpi: int = 300,
     password: str = "",
+    progress_callback=None,
 ) -> Dict[str, Any]:
     """Unified text extraction: tries digital path first, falls back to OCR.
 
@@ -546,18 +563,27 @@ def run_text_extraction(
         page = doc[page_num]
         rotation_deg = page.rotation
 
+        if progress_callback:
+            progress_callback("checking_text_layer", 0, 2, "テキストレイヤー確認中...")
+
         # Step 1: Check for text layer
         has_text = check_text_layer(doc, page_num)
 
         if has_text:
+            if progress_callback:
+                progress_callback("digital_extraction", 1, 2, "デジタルテキスト抽出中...")
             # Digital extraction path
             result = extract_text_digital(doc, page_num, rotation_deg)
             return result
         else:
+            if progress_callback:
+                progress_callback("ocr_fallback", 1, 2, "OCR処理開始...")
             # OCR fallback path
-            ocr_result = run_ocr_pipeline(doc, page_num, dpi)
+            ocr_result = run_ocr_pipeline(doc, page_num, dpi, progress_callback=progress_callback)
             ocr_result["extraction_path"] = "ocr"
             ocr_result["has_text_layer"] = False
+            if progress_callback:
+                progress_callback("extraction_complete", 2, 2, "テキスト抽出完了")
             return ocr_result
     finally:
         doc.close()

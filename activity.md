@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 11 / 25
-**Current Task:** Task 11 - MeCabによる氏名検出とカスタム検出ルールシステム (完了)
+**Tasks Completed:** 12 / 25
+**Current Task:** Task 12 - OCR・検出処理のプログレス表示を実装する (完了)
 
 ---
 
@@ -451,3 +451,56 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** Pythonがシステムにインストールされていないため、MeCab単体テストの実行時確認は未実施。Python環境導入後にfugashi/unidic-liteでの動作確認が必要。
+
+### 2026-04-21 - Task 12: OCR・検出処理のプログレス表示を実装する
+
+**変更内容:**
+- `python-worker/worker.py` 更新
+  - `send_progress()` 関数を追加 - stderr経由でJSON形式の進捗通知を送信
+  - `process_message()` を更新 - `inspect.signature` でハンドラが `request_id` パラメータを受け取るかチェックし、対応するハンドラに渡す
+  - `handle_run_ocr`, `handle_run_text_extraction`, `handle_detect_pii_pdf` に `request_id` パラメータと `progress_callback` を追加
+- `python-worker/ocr_pipeline.py` 更新
+  - `run_ocr_pipeline()` に `progress_callback` パラメータを追加 - レイアウト解析/文字認識/Tesseractチェックの各ステップで進捗通知
+  - `run_ocr_pipeline_base64()` に `progress_callback` パラメータを追加
+  - `run_text_extraction()` に `progress_callback` パラメータを追加 - テキストレイヤー確認/デジタル抽出/OCRフォールバックの各ステップで進捗通知
+- `python-worker/pii_detector.py` 更新
+  - `detect_pii_base64()` に `progress_callback` パラメータを追加 - テキスト抽出/PII検出の各ステップで進捗通知
+- `src-tauri/src/python_worker.rs` 大幅更新
+  - `ProgressEvent` 構造体を定義 - stderrのJSON進捗通知をデシリアライズ
+  - `PythonWorker` に `_stderr_thread` と `stderr_stop` フィールドを追加
+  - `spawn_stderr_reader()` メソッドを追加 - stderrを非同期で読み取り、進捗通知をTauriイベント (`worker-progress`) としてフロントエンドに転送
+  - `spawn()` メソッドを更新 - 子プロセスのstderrを `take()` で取得し、読み取りスレッドを起動
+  - `kill()` メソッドを更新 - `stderr_stop` フラグで読み取りスレッドを終了
+- `src-tauri/src/lib.rs` 更新
+  - `cancel_worker` Tauriコマンドを追加 - ワーカープロセスを終了し、`worker-cancelled` イベントをフロントエンドに送信
+  - `invoke_handler` に `cancel_worker` を登録（合計38コマンド）
+  - `tauri::Emitter` trait をインポート
+- `index.html` 更新
+  - `<footer>` 内に `#progress-container` を追加
+    - `#progress-bar-track` / `#progress-bar-fill`: プログレスバー
+    - `#progress-info`: メッセージ + パーセント表示 + キャンセルボタン
+    - `#progress-stale-warning`: 処理停止警告バナー
+- `src/styles.css` 更新
+  - プログレスバー関連スタイル追加（トラック・フィル・インジケータ・アニメーション）
+  - indeterminateアニメーション（総ステップ数不明時のスライドアニメーション）
+  - キャンセルボタンスタイル（赤枠・ホバー時背景赤）
+  - 処理停止警告バナースタイル
+  - footer を flex-direction: column に変更しツールバーとプログレスバーを縦に配置
+- `src/main.js` 更新
+  - `progressManager` オブジェクトを実装
+    - `show()`: プログレスバー表示・Tauriイベントリスナー登録・stale検出タイマー開始
+    - `update(payload)`: 進捗バー更新（メッセージ・パーセント・インジケータ幅）
+    - `hide()`: プログレスバー非表示・タイマー停止
+    - `_checkStale()`: 2秒ごとに最終更新からの経過時間をチェック、10秒超過で警告表示
+  - `invokeWithProgress()` ヘルパー関数を追加 - 任意のワーカーコマンドをプログレス追跡付きで実行
+  - `analyzePdfWithWorker()` を更新 - プログレス表示付きでPDF解析を実行
+  - キャンセルボタンのクリックハンドラーを実装
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** Pythonワーカーが未導入のため、実行時のプログレス通知の動作確認は未実施。Python環境導入後にOCR/PII検出のプログレス表示を確認必要。

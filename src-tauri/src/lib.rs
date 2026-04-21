@@ -6,7 +6,7 @@ use audit_log::{AuditLogger, AuditRecord};
 use document_state::{MaskingDocument, Region};
 use python_worker::{PingResponse, PythonWorker, WorkerStatus};
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Emitter, State};
 
 struct WorkerState(Mutex<Option<PythonWorker>>);
 
@@ -108,6 +108,23 @@ fn shutdown_worker(state: State<WorkerState>) -> Result<(), String> {
         worker.kill()?;
     }
     *guard = None;
+
+    Ok(())
+}
+
+/// Cancel the current worker operation by killing the process.
+/// The pending invoke on the frontend will receive an error.
+#[tauri::command]
+fn cancel_worker(app_handle: tauri::AppHandle, state: State<WorkerState>) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+    if let Some(worker) = guard.as_mut() {
+        worker.kill()?;
+    }
+    *guard = None;
+
+    // Notify frontend that the operation was cancelled
+    let _ = app_handle.emit("worker-cancelled", ());
 
     Ok(())
 }
@@ -718,6 +735,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             init_worker,
             shutdown_worker,
+            cancel_worker,
             worker_ping,
             worker_get_status,
             log_event,

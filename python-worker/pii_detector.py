@@ -504,6 +504,7 @@ def detect_pii_base64(
     password="",
     enable_name_detection=True,
     custom_rules_dir=None,
+    progress_callback=None,
 ):
     """Detect PII from text extraction results for a PDF page.
 
@@ -519,23 +520,36 @@ def detect_pii_base64(
         password: PDF password if encrypted.
         enable_name_detection: Whether to enable MeCab-based name detection.
         custom_rules_dir: Optional path to custom rules directory.
+        progress_callback: Optional callable(phase, current, total, message) for progress.
 
     Returns:
         Dict with 'detections', 'region_count', 'detection_count'.
     """
+    if progress_callback:
+        progress_callback("pii_detection_start", 0, 2, "PII検出開始...")
+
     if text_regions is None:
         from ocr_pipeline import run_text_extraction
 
+        if progress_callback:
+            progress_callback("text_extraction", 0, 2, "テキスト抽出中...")
+
         extraction_result = run_text_extraction(
-            pdf_data_b64, page_num, 300, password
+            pdf_data_b64, page_num, 300, password, progress_callback=progress_callback
         )
         text_regions = extraction_result.get("regions", [])
+
+    if progress_callback:
+        progress_callback("pii_detecting", 1, 2, "個人情報を検出中...")
 
     detections = detect_pii(
         text_regions, rules_path=rules_path, enabled_types=enabled_types,
         enable_name_detection=enable_name_detection,
         custom_rules_dir=custom_rules_dir,
     )
+
+    if progress_callback:
+        progress_callback("pii_detection_complete", 2, 2, "PII検出完了")
 
     return {
         "detections": detections,

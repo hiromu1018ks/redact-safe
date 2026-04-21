@@ -62,6 +62,20 @@
           <span id="status-display">未読込</span>
           <button id="btn-finalize" disabled>確定して出力</button>
         </div>
+        <!-- Progress Bar (shown during OCR/detection processing) -->
+        <div id="progress-container" style="display:none">
+          <div id="progress-bar-track">
+            <div id="progress-bar-fill"></div>
+          </div>
+          <div id="progress-info">
+            <span id="progress-message"></span>
+            <span id="progress-percent"></span>
+            <button id="btn-cancel-progress" title="処理をキャンセル">キャンセル</button>
+          </div>
+          <div id="progress-stale-warning" style="display:none">
+            処理が停止している可能性があります
+          </div>
+        </div>
       </footer>
     </div>
 

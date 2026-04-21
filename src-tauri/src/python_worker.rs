@@ -2,8 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, Write};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use tauri::{AppHandle, Manager};
+use std::process::{Child, ChildStderr, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Manager};
 
 /// JSON-RPC request sent to Python worker
 #[derive(Serialize, Deserialize, Debug)]
@@ -32,10 +34,26 @@ struct JsonRpcError {
     message: String,
 }
 
+/// Progress notification from Python worker (via stderr)
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ProgressEvent {
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub request_id: u64,
+    pub phase: String,
+    pub current: u64,
+    pub total: u64,
+    pub message: String,
+}
+
 /// Manages the Python worker subprocess
 pub struct PythonWorker {
     child: Child,
     next_id: u64,
+    /// Handle to the stderr reader thread (kept alive while worker is running)
+    _stderr_thread: Option<std::thread::JoinHandle<()>>,
+    /// Flag to signal the stderr reader thread to stop
+    stderr_stop: Arc<AtomicBool>,
 }
 
 impl PythonWorker {
@@ -46,7 +64,7 @@ impl PythonWorker {
 
         log::info!("Starting Python worker: {} {}", python_path.display(), worker_path.display());
 
-        let child = Command::new(&python_path)
+        let mut child = Command::new(&python_path)
             .arg(&worker_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -55,10 +73,64 @@ impl PythonWorker {
             .spawn()
             .map_err(|e| format!("Failed to spawn Python worker: {}", e))?;
 
+        // Take stderr from child (stdout/stdin remain for call())
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or("Worker stderr not available")?;
+
+        // Spawn stderr reader thread
+        let stderr_stop = Arc::new(AtomicBool::new(false));
+        let stderr_thread = Self::spawn_stderr_reader(stderr, app_handle.clone(), stderr_stop.clone())?;
+
         Ok(Self {
             child,
             next_id: 1,
+            _stderr_thread: Some(stderr_thread),
+            stderr_stop,
         })
+    }
+
+    /// Spawn a thread that reads stderr and emits progress events
+    fn spawn_stderr_reader(
+        stderr: ChildStderr,
+        app_handle: AppHandle,
+        stop_flag: Arc<AtomicBool>,
+    ) -> Result<std::thread::JoinHandle<()>, String> {
+        let handle = std::thread::Builder::new()
+            .name("stderr-reader".to_string())
+            .spawn(move || {
+                let reader = std::io::BufReader::new(stderr);
+                for line in reader.lines() {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    match line {
+                        Ok(line_text) => {
+                            let trimmed = line_text.trim();
+                            if trimmed.is_empty() {
+                                continue;
+                            }
+                            // Try to parse as JSON progress notification
+                            if let Ok(progress) = serde_json::from_str::<ProgressEvent>(trimmed) {
+                                if progress.event_type == "progress" {
+                                    let _ = app_handle.emit("worker-progress", &progress);
+                                }
+                            } else {
+                                // Not a progress notification, log as regular stderr
+                                log::info!("[python stderr] {}", trimmed);
+                            }
+                        }
+                        Err(_) => {
+                            // stderr read error or EOF, stop reading
+                            break;
+                        }
+                    }
+                }
+            })
+            .map_err(|e| format!("Failed to spawn stderr reader thread: {}", e))?;
+
+        Ok(handle)
     }
 
     /// Find Python executable
@@ -166,6 +238,8 @@ impl PythonWorker {
 
     /// Kill the worker process
     pub fn kill(&mut self) -> Result<(), String> {
+        // Signal stderr reader to stop
+        self.stderr_stop.store(true, Ordering::Relaxed);
         self.child
             .kill()
             .map_err(|e| format!("Failed to kill worker: {}", e))

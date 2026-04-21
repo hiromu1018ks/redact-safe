@@ -6,6 +6,9 @@ Message format (each line is a complete JSON message):
   Request:  {"jsonrpc": "2.0", "id": <int>, "method": "<method>", "params": {...}}
   Response: {"jsonrpc": "2.0", "id": <int>, "result": {...}}          (success)
             {"jsonrpc": "2.0", "id": <int>, "error": {"code": <int>, "message": "..."}}  (error)
+
+Progress notifications are sent to stderr as JSON lines:
+  {"type": "progress", "request_id": <int>, "phase": "...", "current": <int>, "total": <int>, "message": "..."}
 """
 
 import sys
@@ -13,6 +16,27 @@ import json
 import hashlib
 import base64
 import traceback
+
+
+# ============================================================
+# Progress Notification (via stderr)
+# ============================================================
+
+def send_progress(request_id: int, phase: str, current: int, total: int, message: str = ""):
+    """Send a progress notification to stderr as a JSON line.
+
+    The Rust side reads stderr and forwards these as Tauri events.
+    """
+    notification = {
+        "type": "progress",
+        "request_id": request_id,
+        "phase": phase,
+        "current": current,
+        "total": total,
+        "message": message,
+    }
+    sys.stderr.write(json.dumps(notification, ensure_ascii=False) + "\n")
+    sys.stderr.flush()
 from coord_utils import (
     pdf_point_to_pixel,
     pixel_to_pdf_point,
@@ -202,7 +226,7 @@ def handle_get_version(params: dict) -> dict:
     }
 
 
-def handle_run_ocr(params: dict) -> dict:
+def handle_run_ocr(params: dict, request_id: int = 0) -> dict:
     """Run OCR pipeline on a single page of a PDF."""
     pdf_data_b64 = params.get("pdf_data", "")
     page_num = params.get("page_num", 0)
@@ -212,8 +236,11 @@ def handle_run_ocr(params: dict) -> dict:
     if not pdf_data_b64:
         raise ValueError("pdf_data is required")
 
+    def progress_cb(phase, current, total, message=""):
+        send_progress(request_id, phase, current, total, message)
+
     return run_ocr_pipeline_base64(
-        pdf_data_b64, page_num, dpi, password
+        pdf_data_b64, page_num, dpi, password, progress_callback=progress_cb
     )
 
 
@@ -246,7 +273,7 @@ def handle_extract_text_digital(params: dict) -> dict:
     )
 
 
-def handle_run_text_extraction(params: dict) -> dict:
+def handle_run_text_extraction(params: dict, request_id: int = 0) -> dict:
     """Unified text extraction: digital path first, OCR fallback."""
     pdf_data_b64 = params.get("pdf_data", "")
     page_num = params.get("page_num", 0)
@@ -256,8 +283,11 @@ def handle_run_text_extraction(params: dict) -> dict:
     if not pdf_data_b64:
         raise ValueError("pdf_data is required")
 
+    def progress_cb(phase, current, total, message=""):
+        send_progress(request_id, phase, current, total, message)
+
     return run_text_extraction(
-        pdf_data_b64, page_num, dpi, password
+        pdf_data_b64, page_num, dpi, password, progress_callback=progress_cb
     )
 
 
@@ -350,7 +380,7 @@ def handle_detect_pii(params: dict) -> dict:
     }
 
 
-def handle_detect_pii_pdf(params: dict) -> dict:
+def handle_detect_pii_pdf(params: dict, request_id: int = 0) -> dict:
     """Detect PII from a PDF page (combines text extraction + detection)."""
     pdf_data_b64 = params.get("pdf_data", "")
     page_num = params.get("page_num", 0)
@@ -363,6 +393,9 @@ def handle_detect_pii_pdf(params: dict) -> dict:
     if not pdf_data_b64:
         raise ValueError("pdf_data is required")
 
+    def progress_cb(phase, current, total, message=""):
+        send_progress(request_id, phase, current, total, message)
+
     return detect_pii_base64(
         pdf_data_b64,
         page_num,
@@ -371,6 +404,7 @@ def handle_detect_pii_pdf(params: dict) -> dict:
         password=password,
         enable_name_detection=enable_name_detection,
         custom_rules_dir=custom_rules_dir,
+        progress_callback=progress_cb,
     )
 
 
@@ -511,7 +545,13 @@ def process_message(line: str):
         return
 
     try:
-        result = HANDLERS[method](params)
+        # Handlers that support progress reporting accept request_id
+        import inspect
+        sig = inspect.signature(HANDLERS[method])
+        if "request_id" in sig.parameters:
+            result = HANDLERS[method](params, request_id=msg_id)
+        else:
+            result = HANDLERS[method](params)
         send_response(msg_id, result=result)
     except Exception as e:
         send_response(msg_id, error={

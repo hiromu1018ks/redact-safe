@@ -13,6 +13,124 @@ function generateId() {
   return "r-" + Math.random().toString(36).substring(2, 10);
 }
 
+// ============================================================
+// Progress Manager
+// ============================================================
+
+const progressContainer = document.getElementById("progress-container");
+const progressBarFill = document.getElementById("progress-bar-fill");
+const progressMessage = document.getElementById("progress-message");
+const progressPercent = document.getElementById("progress-percent");
+const progressStaleWarning = document.getElementById("progress-stale-warning");
+const btnCancelProgress = document.getElementById("btn-cancel-progress");
+
+const progressManager = {
+  _active: false,
+  _lastUpdate: 0,
+  _staleTimer: null,
+  _cancelUnlisten: null,
+  _cancelledUnlisten: null,
+
+  /** Show the progress bar and start listening for events */
+  show() {
+    this._active = true;
+    this._lastUpdate = Date.now();
+    progressContainer.style.display = "block";
+    progressBarFill.classList.remove("indeterminate");
+    progressBarFill.style.width = "0%";
+    progressMessage.textContent = "処理を開始しています...";
+    progressPercent.textContent = "0%";
+    progressStaleWarning.style.display = "none";
+    btnCancelProgress.disabled = false;
+
+    // Start stale detection timer (check every 2 seconds)
+    this._staleTimer = setInterval(() => this._checkStale(), 2000);
+
+    // Listen for worker progress events
+    if (isTauri && !this._cancelUnlisten) {
+      this._cancelUnlisten = window.__TAURI__.event.listen("worker-progress", (event) => {
+        this.update(event.payload);
+      });
+      this._cancelledUnlisten = window.__TAURI__.event.listen("worker-cancelled", () => {
+        this.hide();
+      });
+    }
+  },
+
+  /** Update progress from a worker-progress event */
+  update(payload) {
+    if (!this._active) return;
+
+    this._lastUpdate = Date.now();
+    progressStaleWarning.style.display = "none";
+
+    const { phase, current, total, message } = payload;
+
+    // Update message
+    progressMessage.textContent = message || phase;
+
+    // Update bar
+    if (total > 0) {
+      const pct = Math.min(Math.round((current / total) * 100), 100);
+      progressBarFill.style.width = pct + "%";
+      progressPercent.textContent = pct + "%";
+    } else {
+      // Unknown total - show indeterminate
+      progressBarFill.classList.add("indeterminate");
+      progressPercent.textContent = "";
+    }
+  },
+
+  /** Hide the progress bar */
+  hide() {
+    this._active = false;
+    progressContainer.style.display = "none";
+    progressBarFill.classList.remove("indeterminate");
+    if (this._staleTimer) {
+      clearInterval(this._staleTimer);
+      this._staleTimer = null;
+    }
+  },
+
+  /** Check if progress is stale (>10 seconds without update) */
+  _checkStale() {
+    if (!this._active) return;
+    const elapsed = Date.now() - this._lastUpdate;
+    if (elapsed > 10000) {
+      progressStaleWarning.style.display = "block";
+    }
+  },
+
+  /** Whether progress UI is currently active */
+  get isActive() {
+    return this._active;
+  },
+
+  /** Clean up event listeners */
+  cleanup() {
+    if (this._cancelUnlisten) {
+      this._cancelUnlisten.then((fn) => fn());
+      this._cancelUnlisten = null;
+    }
+    if (this._cancelledUnlisten) {
+      this._cancelledUnlisten.then((fn) => fn());
+      this._cancelledUnlisten = null;
+    }
+  },
+};
+
+// Cancel button handler
+btnCancelProgress.addEventListener("click", async () => {
+  btnCancelProgress.disabled = true;
+  progressMessage.textContent = "キャンセル中...";
+  try {
+    await invoke("cancel_worker");
+  } catch (e) {
+    console.warn("Cancel failed:", e);
+  }
+  progressManager.hide();
+});
+
 // --- PDF Viewer ---
 let pdfViewer = null;
 
@@ -237,12 +355,36 @@ function arrayBufferToBase64(buffer) {
 }
 
 // --- PDF Analysis Flow ---
+
+/**
+ * Invoke a worker command with progress tracking.
+ * Shows progress bar, handles stale detection, and supports cancellation.
+ * @param {string} cmd - Tauri command name
+ * @param {object} args - Command arguments
+ * @param {string} [startMessage] - Initial progress message
+ * @returns {Promise<any>} - Command result
+ */
+async function invokeWithProgress(cmd, args, startMessage) {
+  progressManager.show();
+  if (startMessage) {
+    progressManager.update({ phase: cmd, current: 0, total: 0, message: startMessage });
+  }
+  try {
+    const result = await invoke(cmd, args);
+    return result;
+  } finally {
+    progressManager.hide();
+  }
+}
+
 async function analyzePdfWithWorker(pdfData) {
   if (!isTauri) {
     // Browser mode: no Python worker, skip analysis
     return null;
   }
   try {
+    progressManager.show();
+    progressManager.update({ phase: "analyzing", current: 0, total: 1, message: "PDFを解析中..." });
     const base64 = arrayBufferToBase64(pdfData);
     const result = await invoke("analyze_pdf", {
       pdfDataBase64: base64,
@@ -252,6 +394,8 @@ async function analyzePdfWithWorker(pdfData) {
   } catch (e) {
     console.warn("PDF analysis via Python worker failed:", e);
     return null;
+  } finally {
+    progressManager.hide();
   }
 }
 
