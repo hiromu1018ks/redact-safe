@@ -1,0 +1,25 @@
+# RedactSafe - Example Custom Detection Rules
+# Place custom rule files (*.yaml, *.yml, *.json) in this directory.
+# Custom rules are loaded in addition to the bundled default rules.
+# Rules with the same ID as a bundled rule will override it.
+
+version: "1.0"
+
+rules:
+  # Example: Custom pattern for bank account numbers
+  # - id: bank_account
+  #   name: 銀行口座番号
+  #   description: 銀行口座番号パターン（7桁）
+  #   type: custom
+  #   confidence: 0.75
+  #   enabled: true
+  #   pattern: '(?<!\d)\d{7}(?!\d)'
+
+  # Example: Custom pattern for passport numbers
+  # - id: passport
+  #   name: パスポート番号
+  #   description: 日本のパスポート番号（英字2桁+数字7桁）
+  #   type: custom
+  #   confidence: 0.80
+  #   enabled: true
+  #   pattern: '[A-Z]{2}\d{7}'

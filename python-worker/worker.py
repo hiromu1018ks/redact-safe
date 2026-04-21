@@ -27,7 +27,16 @@ from ocr_pipeline import (
     run_text_extraction,
 )
 from bbox_normalizer import normalize_ocr_results
-from pii_detector import detect_pii, detect_pii_base64, load_rules
+from pii_detector import (
+    detect_pii,
+    detect_pii_base64,
+    load_rules,
+    load_custom_rules,
+    merge_rules,
+    validate_rules,
+    check_regex_safety,
+    load_rules_from_string,
+)
 
 
 def _open_pdf(params: dict):
@@ -188,7 +197,7 @@ def handle_ping(params: dict) -> dict:
 def handle_get_version(params: dict) -> dict:
     """Return worker version and available methods."""
     return {
-        "version": "0.7.0",
+        "version": "0.8.0",
         "methods": list(HANDLERS.keys()),
     }
 
@@ -317,10 +326,12 @@ def handle_normalize_bboxes(params: dict) -> dict:
 
 
 def handle_detect_pii(params: dict) -> dict:
-    """Detect PII in text regions using regex-based rules."""
+    """Detect PII in text regions using regex-based rules + MeCab name detection."""
     text_regions = params.get("text_regions", [])
     enabled_types = params.get("enabled_types", None)
     rules_path = params.get("rules_path", None)
+    enable_name_detection = params.get("enable_name_detection", True)
+    custom_rules_dir = params.get("custom_rules_dir", None)
 
     if not text_regions:
         raise ValueError("text_regions is required")
@@ -329,6 +340,8 @@ def handle_detect_pii(params: dict) -> dict:
         text_regions,
         rules_path=rules_path,
         enabled_types=enabled_types,
+        enable_name_detection=enable_name_detection,
+        custom_rules_dir=custom_rules_dir,
     )
     return {
         "detections": detections,
@@ -344,6 +357,8 @@ def handle_detect_pii_pdf(params: dict) -> dict:
     enabled_types = params.get("enabled_types", None)
     rules_path = params.get("rules_path", None)
     password = params.get("password", "")
+    enable_name_detection = params.get("enable_name_detection", True)
+    custom_rules_dir = params.get("custom_rules_dir", None)
 
     if not pdf_data_b64:
         raise ValueError("pdf_data is required")
@@ -354,6 +369,8 @@ def handle_detect_pii_pdf(params: dict) -> dict:
         rules_path=rules_path,
         enabled_types=enabled_types,
         password=password,
+        enable_name_detection=enable_name_detection,
+        custom_rules_dir=custom_rules_dir,
     )
 
 
@@ -364,6 +381,83 @@ def handle_load_detection_rules(params: dict) -> dict:
     return {
         "rules": rules,
         "rule_count": len(rules),
+    }
+
+
+def handle_load_custom_rules(params: dict) -> dict:
+    """Load custom rules from the custom rules directory."""
+    rules_dir = params.get("rules_dir", None)
+    rules, errors = load_custom_rules(rules_dir)
+    return {
+        "rules": rules,
+        "rule_count": len(rules),
+        "errors": errors,
+    }
+
+
+def handle_load_all_rules(params: dict) -> dict:
+    """Load and merge bundled + custom rules."""
+    rules_path = params.get("rules_path", None)
+    custom_rules_dir = params.get("custom_rules_dir", None)
+    bundled_rules = load_rules(rules_path)
+    custom_rules, errors = load_custom_rules(custom_rules_dir)
+    merged = merge_rules(bundled_rules, custom_rules)
+    return {
+        "rules": merged,
+        "rule_count": len(merged),
+        "bundled_count": len(bundled_rules),
+        "custom_count": len(custom_rules),
+        "errors": errors,
+    }
+
+
+def handle_validate_rules(params: dict) -> dict:
+    """Validate detection rules against the schema."""
+    import json as _json
+
+    rules_content = params.get("rules_content", "")
+    format_hint = params.get("format", None)
+
+    if not rules_content:
+        raise ValueError("rules_content is required")
+
+    rules = load_rules_from_string(rules_content, format_hint=format_hint)
+    is_valid, errors = validate_rules(rules)
+    return {
+        "is_valid": is_valid,
+        "rules": rules,
+        "rule_count": len(rules),
+        "errors": errors,
+    }
+
+
+def handle_check_regex_safety(params: dict) -> dict:
+    """Check a regex pattern for catastrophic backtracking risks."""
+    pattern = params.get("pattern", "")
+    if not pattern:
+        raise ValueError("pattern is required")
+
+    is_safe, warning = check_regex_safety(pattern)
+    return {
+        "is_safe": is_safe,
+        "warning": warning,
+    }
+
+
+def handle_detect_names(params: dict) -> dict:
+    """Detect person names in text regions using MeCab morphological analysis."""
+    from name_detector import detect_names
+
+    text_regions = params.get("text_regions", [])
+    enabled_types = params.get("enabled_types", None)
+
+    if not text_regions:
+        raise ValueError("text_regions is required")
+
+    detections = detect_names(text_regions, enabled_types=enabled_types)
+    return {
+        "detections": detections,
+        "detection_count": len(detections),
     }
 
 
@@ -386,6 +480,11 @@ HANDLERS = {
     "detect_pii": handle_detect_pii,
     "detect_pii_pdf": handle_detect_pii_pdf,
     "load_detection_rules": handle_load_detection_rules,
+    "load_custom_rules": handle_load_custom_rules,
+    "load_all_rules": handle_load_all_rules,
+    "validate_rules": handle_validate_rules,
+    "check_regex_safety": handle_check_regex_safety,
+    "detect_names": handle_detect_names,
 }
 
 

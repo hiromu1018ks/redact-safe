@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 10 / 25
-**Current Task:** Task 10 - 正規表現によるPII自動検出エンジン (完了)
+**Tasks Completed:** 11 / 25
+**Current Task:** Task 11 - MeCabによる氏名検出とカスタム検出ルールシステム (完了)
 
 ---
 
@@ -372,3 +372,82 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** Pythonがシステムにインストールされていないため、単体テストの実行時確認は未実施。Python環境導入後に実行必要。
+
+### 2026-04-21 - Task 11: MeCabによる氏名検出とカスタム検出ルールシステムを実装
+
+**変更内容:**
+- `python-worker/name_detector.py` 作成 - MeCab形態素解析による氏名検出モジュール実装
+  - `detect_names()`: fugashi (MeCab wrapper) + UniDicによる形態素解析で固有名詞（人名）を検出
+  - 連続する人名トークンをグルーピングしてフルネームを検出（姓+名のペアで高信頼度）
+  - 敬称（様/氏/さん/殿/先生）の後続で信頼度ブースト
+  - `_get_pos_fields()`: UniDic品詞情報の抽出（pos1/pos2/pos3/pos4対応）
+  - `_is_name_token()`: 人名姓/人名名/人名の判定
+  - `_calculate_name_confidence()`: トークン数・姓/名の有無・敬称の有無による信頼度計算
+  - 遅延初期化パターン: fugashi未インストール時はgraceful degradation
+  - 検出結果に type="name", rule_id="name_mecab", rule_name="氏名（MeCab形態素解析）" を付与
+- `python-worker/pii_detector.py` 大幅拡張
+  - `check_regex_safety()`: ReDoS（catastrophic backtracking）検出を実装
+    - ネストされた量子子の検出: `(a+)+`, `(a*)*`, `(a+)*`
+    - 量子子付き選択の検出: `(a|a)+`
+    - 大きな繰り返し範囲の検出: `{0,200}`
+    - 複雑なグループへの非制限量子子の検出
+  - `validate_rule()`: 単一ルールのスキーマ検証を実装
+    - 必須フィールド検証: id, name, type, pattern
+    - 型検証: type は VALID_PII_TYPES に含まれること
+    - 正規表現の妥当性・安全性チェック
+    - confidence の範囲チェック (0.0-1.0)
+    - enabled の型チェック (boolean)
+    - 未知フィールドの検出
+  - `validate_rules()`: ルールリストの検証 + 重複ID検出
+  - `load_rules_from_string()`: YAML/JSON文字列からのルール読込（フォーマット自動検出対応）
+  - `load_custom_rules()`: custom_rules/ ディレクトリからのカスタムルール読込
+    - YAML/JSON ファイルの自動発見と読込
+    - スキーマ検証不合格ルールのスキップ
+    - ID競合の検出
+  - `merge_rules()`: 本体同梱ルールとカスタムルールのマージ（カスタムで同ID上書き）
+  - `_get_custom_rules_dir()`: カスタムルールディレクトリパス取得
+  - `detect_pii()` 拡張: MeCab名前検出の統合、カスタムルール読込、正規表現タイムアウト保護
+  - `detect_pii_base64()` / `detect_pii_text()` に enable_name_detection, custom_rules_dir パラメータ追加
+  - `VALID_PII_TYPES`, `REGEX_TIMEOUT_SECONDS`, `REGEX_MAX_STEPS` 定数定義
+- `python-worker/custom_rules/` ディレクトリ作成
+  - `example_custom_rules.yaml`: カスタムルールのサンプル（コメントアウト例付き）
+  - `README.md`: カスタムルールのドキュメント
+- `python-worker/worker.py` 更新
+  - インポート追加: `load_custom_rules`, `merge_rules`, `validate_rules`, `check_regex_safety`, `load_rules_from_string`
+  - `handle_load_custom_rules`: カスタムルール読込JSON-RPCハンドラ追加
+  - `handle_load_all_rules`: 本体+カスタム統合読込JSON-RPCハンドラ追加
+  - `handle_validate_rules`: ルールスキーマ検証JSON-RPCハンドラ追加
+  - `handle_check_regex_safety`: 正規表現安全性チェックJSON-RPCハンドラ追加
+  - `handle_detect_names`: MeCab氏名検出JSON-RPCハンドラ追加
+  - `handle_detect_pii` / `handle_detect_pii_pdf`: enable_name_detection, custom_rules_dir パラメータ対応
+  - HANDLERSに5つの新メソッド追加
+  - バージョンを0.8.0に更新
+- `src-tauri/src/lib.rs` 更新 - Tauriコマンド追加
+  - `detect_pii`: enable_name_detection, custom_rules_dir パラメータ追加
+  - `detect_pii_pdf`: enable_name_detection, custom_rules_dir パラメータ追加
+  - `load_custom_rules`: カスタムルール読込コマンド追加
+  - `load_all_rules`: 統合ルール読込コマンド追加
+  - `validate_rules`: ルール検証コマンド追加
+  - `check_regex_safety`: 正規表現安全性チェックコマンド追加
+  - `detect_names`: MeCab氏名検出コマンド追加
+  - invoke_handlerに5つの新コマンド登録（合計37コマンド）
+- `python-worker/tests/test_name_detector.py` 作成 - 氏名検出単体テスト（18テストケース）
+  - TestIsNameToken: 人名/姓/名/非人名/動詞/地名の判定
+  - TestCalculateNameConfidence: 単一/フルネーム/敬称ブースト/空/上限
+  - TestDetectNames: 基本検出/敬称/空テキスト/非固有名詞/bbox保持/型フィルタ/結果構造
+- `python-worker/tests/test_custom_rules.py` 作成 - カスタムルール・検証・安全性テスト（52テストケース）
+  - TestRegexSafety: 安全パターン/ネスト量子子/選択/大繰り返し/複雑グループ/既存パターン安全性
+  - TestValidateRule: 有効/必須フィールド欠落/無効型/無効パターン/安全でないパターン/信頼度範囲外/有効型全種別
+  - TestValidateRules: 有効リスト/重複ID/混在/空リスト
+  - TestLoadRulesFromString: YAML/JSON/自動検出/空文字/無効コンテンツ
+  - TestMergeRules: 非上書き/上書き/空カスタム/空本体
+  - TestLoadCustomRules: 非存在/空/YAML/JSON/無効スキップ/非ルールファイル/複数ファイル
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** Pythonがシステムにインストールされていないため、MeCab単体テストの実行時確認は未実施。Python環境導入後にfugashi/unidic-liteでの動作確認が必要。

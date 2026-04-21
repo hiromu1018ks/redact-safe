@@ -526,13 +526,15 @@ fn normalize_bboxes(
 
 // --- PII Detection Commands ---
 
-/// Detect PII in text regions using regex-based rules via Python worker.
+/// Detect PII in text regions using regex-based rules + MeCab name detection via Python worker.
 #[tauri::command]
 fn detect_pii(
     state: State<WorkerState>,
     text_regions: serde_json::Value,
     enabled_types: Option<Vec<String>>,
     rules_path: Option<String>,
+    enable_name_detection: Option<bool>,
+    custom_rules_dir: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     let worker = guard
@@ -543,6 +545,8 @@ fn detect_pii(
         "text_regions": text_regions,
         "enabled_types": enabled_types,
         "rules_path": rules_path,
+        "enable_name_detection": enable_name_detection.unwrap_or(true),
+        "custom_rules_dir": custom_rules_dir,
     });
 
     let result = worker.call("detect_pii", Some(params))?;
@@ -559,6 +563,8 @@ fn detect_pii_pdf(
     enabled_types: Option<Vec<String>>,
     rules_path: Option<String>,
     password: Option<String>,
+    enable_name_detection: Option<bool>,
+    custom_rules_dir: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     let worker = guard
@@ -571,6 +577,8 @@ fn detect_pii_pdf(
         "enabled_types": enabled_types,
         "rules_path": rules_path,
         "password": password.unwrap_or_default(),
+        "enable_name_detection": enable_name_detection.unwrap_or(true),
+        "custom_rules_dir": custom_rules_dir,
     });
 
     let result = worker.call("detect_pii_pdf", Some(params))?;
@@ -593,6 +601,107 @@ fn load_detection_rules(
     });
 
     let result = worker.call("load_detection_rules", Some(params))?;
+    Ok(result)
+}
+
+/// Load custom rules from the custom rules directory via Python worker.
+#[tauri::command]
+fn load_custom_rules(
+    state: State<WorkerState>,
+    rules_dir: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "rules_dir": rules_dir,
+    });
+
+    let result = worker.call("load_custom_rules", Some(params))?;
+    Ok(result)
+}
+
+/// Load and merge bundled + custom rules via Python worker.
+#[tauri::command]
+fn load_all_rules(
+    state: State<WorkerState>,
+    rules_path: Option<String>,
+    custom_rules_dir: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "rules_path": rules_path,
+        "custom_rules_dir": custom_rules_dir,
+    });
+
+    let result = worker.call("load_all_rules", Some(params))?;
+    Ok(result)
+}
+
+/// Validate detection rules against the schema via Python worker.
+#[tauri::command]
+fn validate_rules(
+    state: State<WorkerState>,
+    rules_content: String,
+    format: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "rules_content": rules_content,
+        "format": format,
+    });
+
+    let result = worker.call("validate_rules", Some(params))?;
+    Ok(result)
+}
+
+/// Check a regex pattern for catastrophic backtracking risks via Python worker.
+#[tauri::command]
+fn check_regex_safety(
+    state: State<WorkerState>,
+    pattern: String,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pattern": pattern,
+    });
+
+    let result = worker.call("check_regex_safety", Some(params))?;
+    Ok(result)
+}
+
+/// Detect person names in text regions using MeCab morphological analysis via Python worker.
+#[tauri::command]
+fn detect_names(
+    state: State<WorkerState>,
+    text_regions: serde_json::Value,
+    enabled_types: Option<Vec<String>>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "text_regions": text_regions,
+        "enabled_types": enabled_types,
+    });
+
+    let result = worker.call("detect_names", Some(params))?;
     Ok(result)
 }
 
@@ -639,6 +748,11 @@ pub fn run() {
             detect_pii,
             detect_pii_pdf,
             load_detection_rules,
+            load_custom_rules,
+            load_all_rules,
+            validate_rules,
+            check_regex_safety,
+            detect_names,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

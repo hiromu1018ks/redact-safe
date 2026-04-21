@@ -313,7 +313,7 @@ Tauri Desktop App
       "本体同梱ルールとカスタムルールのファイル分離を実装",
       "テストテキストで氏名検出が動作することを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",
