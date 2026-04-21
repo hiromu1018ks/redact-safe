@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-22
-**Tasks Completed:** 21 / 25
-**Current Task:** Task 21 - 警告バナー・設定ダイアログ・キーボードショートカット・アクセシビリティを実装する (完了)
+**Tasks Completed:** 22 / 25
+**Current Task:** Task 22 - メインウィンドウレイアウトとUI全体の統合・ポリッシュを行う (完了)
 
 ---
 
@@ -899,6 +899,34 @@
     - `Escape`: 設定/ヘルプダイアログを閉じる、または選択中リージョンを解除
     - `Tab`: 次のリージョンを選択（サイクル）
     - `Shift+Tab`: 前のリージョンを選択（逆サイクル）
+
+**実行コマンド:**
+- `npm run build` - 成功
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+
+**課題:** ブラウザでの動作確認は権限未承認のため未実施。ビルド成功で代替確認。
+
+### 2026-04-22 - Task 22: メインウィンドウレイアウトとUI全体の統合・ポリッシュを行う
+
+**変更内容:**
+- `index.html` 更新
+  - ヘッダーのメニューボタンをドロップダウンメニューに改修: ファイル(PDFを開く)、設定(設定ダイアログ)、ヘルプ(キーボードショートカット)
+  - 各メニュー項目にショートカットキーの表示を追加
+  - フッターツールバーにモード表示(`#mode-display`)を追加: 編集モード/確認モード/確定済みを状態に応じて表示
+  - ステータスバー(`#status-bar`)をフッター内に追加: ファイル名・ページ情報とドキュメント状態バッジ(draft/confirmed/finalized)を表示
+- `src/styles.css` 更新
+  - ドロップダウンメニュースタイル追加: `.menu-bar`, `.menu-dropdown`, `.menu-trigger`, `.menu-popup`, `.menu-item`, `.menu-shortcut`
+  - ホバー時のメニュー切替アニメーション対応
+  - モード表示スタイル追加: `.mode-display` (mode-edit: 緑, mode-review: 青, mode-readonly: 灰, mode-finalized: 水色)
+  - ステータスバースタイル追加: `#status-bar`, `.status-bar-text`, `.status-bar-badge` (sb-draft/confirmed/finalized)
+  - フォントサイズ拡大時の新しいUI要素対応（large/xlarge各クラスにメニュー・モード表示・ステータスバーを追加）
+- `src/main.js` 大幅更新
+  - メニューバードロップダウンロジック実装: クリックで開閉、ホバーでメニュー切替、Escapeで閉じる、外部クリックで閉じる
+  - メニューアイテムアクションハンドラー実装: PDFを開く、設定ダイアログ、ショートカット一覧
+  - `docStatusManager.updateUI()` にステータスバー更新ロジック追加: ファイル名・ページ情報と状態バッジの表示
+  - `docStatusManager.updateUI()` にモード表示更新ロジック追加: draft→編集モード、confirmed→確認モード、finalized→確定済み
+  - ウィンドウリサイズハンドラー追加: PDF表示中にウィンドウサイズ変更時、オーバーレイcanvasのリサイズと再描画を実行
+  - 古いメニューボタンハンドラーをドロップダウンメニューに合わせて削除
 
 **実行コマンド:**
 - `npm run build` - 成功

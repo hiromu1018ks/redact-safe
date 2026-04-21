@@ -475,7 +475,7 @@ Tauri Desktop App
       "ウィンドウリサイズに応じたレイアウト調整を実装",
       "全体のUIが要件定義書の画面構成図に合致することを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "integration",

@@ -10,10 +10,25 @@
     <div id="app">
       <header>
         <h1>RedactSafe</h1>
-        <nav>
-          <button id="menu-file" title="ファイルメニュー (Ctrl+OでPDFを開く)">ファイル</button>
-          <button id="menu-settings" title="設定 (Ctrl+,)">設定</button>
-          <button id="menu-help" title="ヘルプ・キーボードショートカット一覧">ヘルプ</button>
+        <nav class="menu-bar">
+          <div class="menu-dropdown" data-menu="file">
+            <button class="menu-trigger" title="ファイルメニュー (Ctrl+OでPDFを開く)">ファイル</button>
+            <div class="menu-popup" id="menu-file-popup">
+              <button class="menu-item" id="menu-item-open" data-action="open">PDFを開く<span class="menu-shortcut">Ctrl+O</span></button>
+            </div>
+          </div>
+          <div class="menu-dropdown" data-menu="settings">
+            <button class="menu-trigger" title="設定 (Ctrl+,)">設定</button>
+            <div class="menu-popup" id="menu-settings-popup">
+              <button class="menu-item" id="menu-item-settings" data-action="settings">設定<span class="menu-shortcut">Ctrl+,</span></button>
+            </div>
+          </div>
+          <div class="menu-dropdown" data-menu="help">
+            <button class="menu-trigger" title="ヘルプ・キーボードショートカット一覧">ヘルプ</button>
+            <div class="menu-popup" id="menu-help-popup">
+              <button class="menu-item" id="menu-item-shortcuts" data-action="shortcuts">キーボードショートカット</button>
+            </div>
+          </div>
         </nav>
       </header>
       <main>
@@ -99,6 +114,7 @@
         <div id="toolbar">
           <button id="btn-toolbar-all-on" disabled title="全てのマスキングを有効にします">全てON</button>
           <button id="btn-toolbar-all-off" disabled title="全てのマスキングを無効にします">全てOFF</button>
+          <span id="mode-display" class="mode-display"></span>
           <span id="status-display">未読込</span>
           <button id="btn-confirm" style="display:none" title="確認承認：マスキング内容を確定する前に確認します">確認</button>
           <button id="btn-rollback" style="display:none" title="差し戻し：確認を取り消して編集可能に戻します">差し戻し</button>
@@ -117,6 +133,11 @@
           <div id="progress-stale-warning" style="display:none">
             処理が停止している可能性があります
           </div>
+        </div>
+        <!-- Status Bar -->
+        <div id="status-bar">
+          <span id="status-bar-text" class="status-bar-text">未読込</span>
+          <span id="status-bar-badge" class="status-bar-badge" style="display:none"></span>
         </div>
       </footer>
     </div>

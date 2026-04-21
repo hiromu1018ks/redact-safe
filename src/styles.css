@@ -33,23 +33,121 @@ header h1 {
   font-weight: 600;
 }
 
-header nav {
+/* Menu Bar with Dropdowns */
+.menu-bar {
   display: flex;
-  gap: 8px;
+  gap: 2px;
 }
 
-header nav button {
+.menu-dropdown {
+  position: relative;
+}
+
+.menu-trigger {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+  border: 1px solid transparent;
   color: #fff;
   padding: 4px 12px;
   border-radius: 4px;
   cursor: pointer;
   font-size: 13px;
+  font-family: inherit;
+  transition: background 0.15s;
 }
 
-header nav button:hover {
-  background: rgba(255, 255, 255, 0.1);
+.menu-trigger:hover,
+.menu-trigger.active {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.menu-popup {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 220px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 600;
+  padding: 4px 0;
+  margin-top: 4px;
+}
+
+.menu-popup.open {
+  display: block;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  color: #333;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+
+.menu-item:hover {
+  background: #e8f0fe;
+}
+
+.menu-item:disabled {
+  color: #999;
+  cursor: default;
+}
+
+.menu-item:disabled:hover {
+  background: transparent;
+}
+
+.menu-shortcut {
+  font-size: 12px;
+  color: #888;
+  margin-left: 24px;
+  font-family: "Segoe UI", sans-serif;
+}
+
+/* Mode Display */
+.mode-display {
+  font-size: 12px;
+  color: #666;
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: #f0f0f0;
+  white-space: nowrap;
+}
+
+.mode-display.mode-edit {
+  color: #2e7d32;
+  background: #e8f5e9;
+  border: 1px solid #a5d6a7;
+}
+
+.mode-display.mode-review {
+  color: #1565c0;
+  background: #e3f2fd;
+  border: 1px solid #90caf9;
+}
+
+.mode-display.mode-readonly {
+  color: #757575;
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+}
+
+.mode-display.mode-finalized {
+  color: #004085;
+  background: #cce5ff;
+  border: 1px solid #b8daff;
 }
 
 main {
@@ -600,6 +698,55 @@ footer {
   cursor: not-allowed !important;
 }
 
+/* Status Bar */
+#status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 16px;
+  height: 22px;
+  background: #f0f0f0;
+  border-top: 1px solid #ddd;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #666;
+}
+
+.status-bar-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-bar-badge {
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+.status-bar-badge.sb-draft {
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffc107;
+}
+
+.status-bar-badge.sb-confirmed {
+  background: #d4edda;
+  color: #155724;
+  border: 1px solid #28a745;
+}
+
+.status-bar-badge.sb-finalized {
+  background: #cce5ff;
+  color: #004085;
+  border: 1px solid #007bff;
+}
+
 /* Warning banner hidden in finalized state */
 #warning-banner.hidden {
   display: none;
@@ -1112,6 +1259,12 @@ body.font-size-large .settings-radio { font-size: 15px; }
 body.font-size-large .worker-test h3 { font-size: 15px; }
 body.font-size-large .worker-test button { font-size: 14px; }
 body.font-size-large .region-count { font-size: 13px; }
+body.font-size-large .menu-trigger { font-size: 14px; }
+body.font-size-large .menu-item { font-size: 14px; }
+body.font-size-large .menu-shortcut { font-size: 13px; }
+body.font-size-large .mode-display { font-size: 13px; }
+body.font-size-large #status-bar { font-size: 12px; }
+body.font-size-large .status-bar-badge { font-size: 11px; }
 
 body.font-size-xlarge {
   font-size: 18px;
@@ -1131,3 +1284,9 @@ body.font-size-xlarge .settings-radio { font-size: 16px; }
 body.font-size-xlarge .worker-test h3 { font-size: 16px; }
 body.font-size-xlarge .worker-test button { font-size: 15px; }
 body.font-size-xlarge .region-count { font-size: 14px; }
+body.font-size-xlarge .menu-trigger { font-size: 15px; }
+body.font-size-xlarge .menu-item { font-size: 15px; }
+body.font-size-xlarge .menu-shortcut { font-size: 14px; }
+body.font-size-xlarge .mode-display { font-size: 14px; }
+body.font-size-xlarge #status-bar { font-size: 13px; }
+body.font-size-xlarge .status-bar-badge { font-size: 12px; }

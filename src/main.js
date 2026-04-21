@@ -390,6 +390,43 @@ const docStatusManager = {
         warningBanner.style.display = "none";
       }
     }
+
+    // --- Mode display ---
+    if (modeDisplay) {
+      if (!status) {
+        modeDisplay.textContent = "";
+        modeDisplay.className = "mode-display";
+      } else if (status === "draft") {
+        modeDisplay.textContent = "編集モード";
+        modeDisplay.className = "mode-display mode-edit";
+      } else if (status === "confirmed") {
+        modeDisplay.textContent = "確認モード";
+        modeDisplay.className = "mode-display mode-review";
+      } else if (status === "finalized") {
+        modeDisplay.textContent = "確定済み";
+        modeDisplay.className = "mode-display mode-finalized";
+      }
+    }
+
+    // --- Status bar ---
+    if (statusBarText) {
+      if (status) {
+        statusBarText.textContent = pdfViewer.fileName
+          ? `${pdfViewer.fileName} — ${pdfViewer.currentPage || 1} / ${pdfViewer.totalPages || "?"}ページ`
+          : STATUS_LABELS[status] || status;
+      } else {
+        statusBarText.textContent = "未読込";
+      }
+    }
+    if (statusBarBadge) {
+      if (status) {
+        statusBarBadge.style.display = "inline-block";
+        statusBarBadge.textContent = STATUS_LABELS[status] || status;
+        statusBarBadge.className = "status-bar-badge sb-" + status;
+      } else {
+        statusBarBadge.style.display = "none";
+      }
+    }
   },
 };
 
@@ -1083,6 +1120,81 @@ async function toggleSelectedRegion() {
   await updateSidebarRegions();
 }
 
+// ============================================================
+// Menu Bar (Dropdown Menus)
+// ============================================================
+
+const menuDropdowns = document.querySelectorAll(".menu-dropdown");
+let activeMenu = null;
+
+function closeAllMenus() {
+  menuDropdowns.forEach((dropdown) => {
+    dropdown.querySelector(".menu-popup").classList.remove("open");
+    dropdown.querySelector(".menu-trigger").classList.remove("active");
+  });
+  activeMenu = null;
+}
+
+menuDropdowns.forEach((dropdown) => {
+  const trigger = dropdown.querySelector(".menu-trigger");
+  const popup = dropdown.querySelector(".menu-popup");
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (activeMenu === dropdown) {
+      closeAllMenus();
+    } else {
+      closeAllMenus();
+      popup.classList.add("open");
+      trigger.classList.add("active");
+      activeMenu = dropdown;
+    }
+  });
+
+  // Hover to switch menus when one is already open
+  dropdown.addEventListener("mouseenter", () => {
+    if (activeMenu && activeMenu !== dropdown) {
+      closeAllMenus();
+      popup.classList.add("open");
+      trigger.classList.add("active");
+      activeMenu = dropdown;
+    }
+  });
+});
+
+// Close menus on click outside
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".menu-dropdown")) {
+    closeAllMenus();
+  }
+});
+
+// Close menus on Escape
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && activeMenu) {
+    closeAllMenus();
+    e.stopPropagation();
+  }
+});
+
+// Menu item actions
+document.getElementById("menu-item-open").addEventListener("click", () => {
+  closeAllMenus();
+  if (!docStatusManager.getStatus()) {
+    openPdfFile();
+  }
+});
+
+document.getElementById("menu-item-settings").addEventListener("click", () => {
+  closeAllMenus();
+  showSettingsDialog();
+});
+
+document.getElementById("menu-item-shortcuts").addEventListener("click", () => {
+  closeAllMenus();
+  showHelpDialog();
+});
+
 // --- DOM Elements ---
 const pdfCanvas = document.getElementById("pdf-canvas");
 const overlayCanvas = document.getElementById("overlay-canvas");
@@ -1095,6 +1207,9 @@ const pageInput = document.getElementById("page-input");
 const totalPagesSpan = document.getElementById("total-pages");
 const coordDisplay = document.getElementById("coord-display");
 const statusDisplay = document.getElementById("status-display");
+const statusBarText = document.getElementById("status-bar-text");
+const statusBarBadge = document.getElementById("status-bar-badge");
+const modeDisplay = document.getElementById("mode-display");
 
 const btnOpenPdf = document.getElementById("btn-open-pdf");
 const btnZoomIn = document.getElementById("btn-zoom-in");
@@ -2752,21 +2867,21 @@ helpDialog.addEventListener("keydown", (e) => {
 });
 
 // ============================================================
-// Menu Button Handlers
+// Window Resize Handler
 // ============================================================
 
-document.getElementById("menu-file").addEventListener("click", () => {
-  if (!docStatusManager.getStatus()) {
-    openPdfFile();
+window.addEventListener("resize", () => {
+  if (!pdfViewer || !pdfViewer.isLoaded) return;
+
+  // Resize overlay canvas to match PDF canvas
+  if (maskingOverlay) {
+    maskingOverlay.resize(pdfCanvas.width, pdfCanvas.height);
   }
-});
 
-document.getElementById("menu-settings").addEventListener("click", () => {
-  showSettingsDialog();
-});
-
-document.getElementById("menu-help").addEventListener("click", () => {
-  showHelpDialog();
+  // Re-render overlay with current regions
+  if (maskingOverlay && maskingOverlay.regions.length > 0) {
+    maskingOverlay.render();
+  }
 });
 
 // ============================================================
