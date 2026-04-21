@@ -377,7 +377,7 @@ Tauri Desktop App
       "サイドバーの検出項目クリックで該当箇所にスクロール・ハイライトする機能を実装",
       "ウォーターマークがfinalized状態で消滅することを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

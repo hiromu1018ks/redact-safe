@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 14 / 25
-**Current Task:** Task 14 - マスキング矩形の操作（ON/OFF・移動・リサイズ・追加・削除）を実装する (完了)
+**Tasks Completed:** 15 / 25
+**Current Task:** Task 15 - 検出一覧サイドバーパネル・一括操作・フィルタリング・ウォーターマークを実装する (完了)
 
 ---
 
@@ -578,3 +578,46 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** ブラウザでの対話操作テスト（ドラッグ・リサイズ・新規描画）は権限未承認のため未実施。コードレビューにより座標計算・イベントハンドリングの妥当性を確認済み。
+
+### 2026-04-21 - Task 15: 検出一覧サイドバーパネル・一括操作・フィルタリング・ウォーターマークを実装する
+
+**変更内容:**
+- `index.html` 更新 - サイドバー拡張とウォーターマーク要素追加
+  - `#sidebar` 内に検出一覧パネルを実装: ヘッダー(件数表示)・プレースホルダー・コンテンツエリア
+  - フィルターコントロール: PII種別セレクト(氏名/住所/電話番号/メール/生年月日/マイナンバー/法人番号/カスタム) + 状態セレクト(全て/ON/OFF)
+  - サイドバー一括操作ボタン: [全てON] [全てOFF]
+  - `#region-list`: 動的に生成される検出項目一覧
+  - `#watermark`: 固定配置のウォーターマークオーバーレイ (z-index: 500, pointer-events: none)
+- `src/styles.css` 更新 - サイドバー・ウォーターマーク・リージョンリストのスタイル追加
+  - サイドバー: flexboxレイアウト、ヘッダー/フィルター/アクション/リストの4セクション構成
+  - リージョンアイテム: ON時黒背景/OF時灰色背景のアイコン、PII種別別の色分けラベル
+  - 選択状態: 背景ハイライト(#e3f2fd) + 左ボーダー(#4a90d9)
+  - ウォーターマーク: 72pxフォント、半透明赤(rgba(220,20,20,0.18))、-45度回転
+  - フィルターセレクト/一括ボタンのスタイル定義
+- `src/main.js` 大幅更新
+  - `PII_TYPE_LABELS` 定数: PII種別→日本語ラベルのマッピング
+  - `Sidebar Manager` セクション追加:
+    - `allRegionsByPage`: 全ページのリージョンデータを保持
+    - `sidebarFilter`: フィルター状態(type, status)
+    - `updateSidebarRegions()`: バックエンド/テストデータから全リージョンを取得してサイドバー更新
+    - `renderSidebar()`: フィルター適用→ページ/座標順ソート→リスト描画
+    - `onSidebarRegionClick()`: ページナビゲーション + リージョン選択 + サイドバー選択ハイライト
+    - フィルターセレクトのchangeイベントハンドラー
+    - サイドバー一括ON/OFFボタンハンドラー(Tauri/ブラウザ両モード対応)
+  - `Watermark Manager` セクション追加:
+    - `updateWatermark()`: draft/confirmedで表示、finalizedで非表示(Tauriモード)、ブラウザモードは常時表示
+  - PDF読込時(onLoad)に `updateSidebarRegions()` + `updateWatermark()` を追加
+  - `fetchAndDisplayRegions()` で全ページリージョンを `allRegionsByPage` にキャッシュ + `renderSidebar()` 呼出
+  - 全リージョン操作(move/resize/add/remove/toggle/undo/delete)後に `updateSidebarRegions()` 追加
+  - リージョン選択/選択解除時に `renderSidebar()` 追加(サイドバーの選択ハイライト同期)
+  - デバッグパネルのテストボタン群に `updateSidebarRegions()` 追加
+  - 確定パネル(confirm/rollback/finalize)ボタンに `updateWatermark()` 追加
+  - フッターツールバーの[全てON]/[全てOFF]ボタンにイベントハンドラー実装
+
+**実行コマンド:**
+- `npm run build` - 成功
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** ブラウザでの視覚確認は権限未承認のため未実施。ウォーターマークのfinalized状態での非表示はTauri環境での動作確認が必要。

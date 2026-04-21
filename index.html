@@ -18,8 +18,40 @@
       </header>
       <main>
         <aside id="sidebar">
-          <h2>検出一覧</h2>
-          <p>PDFファイルを読み込んでください</p>
+          <div class="sidebar-header">
+            <h2>検出一覧</h2>
+            <span id="region-count" class="region-count">0件</span>
+          </div>
+          <div id="sidebar-placeholder">
+            <p>PDFファイルを読み込んでください</p>
+          </div>
+          <div id="sidebar-content" style="display:none">
+            <div class="sidebar-filters">
+              <label class="filter-label">種別フィルタ:</label>
+              <select id="filter-type" class="filter-select">
+                <option value="all">全て</option>
+                <option value="name">氏名</option>
+                <option value="address">住所</option>
+                <option value="phone">電話番号</option>
+                <option value="email">メールアドレス</option>
+                <option value="birthDate">生年月日</option>
+                <option value="myNumber">マイナンバー</option>
+                <option value="corporateNumber">法人番号</option>
+                <option value="custom">カスタム</option>
+              </select>
+              <label class="filter-label filter-status-label">状態:</label>
+              <select id="filter-status" class="filter-select">
+                <option value="all">全て</option>
+                <option value="enabled">ON</option>
+                <option value="disabled">OFF</option>
+              </select>
+            </div>
+            <div class="sidebar-actions">
+              <button id="btn-sidebar-all-on" class="sidebar-btn sidebar-btn-on">全てON</button>
+              <button id="btn-sidebar-all-off" class="sidebar-btn sidebar-btn-off">全てOFF</button>
+            </div>
+            <div id="region-list" class="region-list"></div>
+          </div>
         </aside>
         <section id="viewer">
           <div id="warning-banner">
@@ -58,6 +90,10 @@
           </div>
         </section>
       </main>
+      <!-- Watermark overlay (shown in draft/confirmed state) -->
+      <div id="watermark" class="watermark-overlay" style="display:none">
+        <span>未確定 - 公開禁止</span>
+      </div>
       <footer>
         <div id="toolbar">
           <button id="btn-toolbar-all-on" disabled>全てON</button>

@@ -60,16 +60,225 @@ main {
 
 #sidebar {
   width: 280px;
+  min-width: 280px;
   background: #fff;
   border-right: 1px solid #ddd;
-  overflow-y: auto;
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #eee;
+  flex-shrink: 0;
 }
 
 #sidebar h2 {
   font-size: 15px;
-  margin-bottom: 12px;
+  margin: 0;
   color: #1a1a2e;
+}
+
+.region-count {
+  font-size: 12px;
+  color: #666;
+  background: #f0f0f0;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+#sidebar-placeholder {
+  padding: 16px;
+  color: #888;
+  font-size: 13px;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#sidebar-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.sidebar-filters {
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+  flex-shrink: 0;
+}
+
+.filter-label {
+  font-size: 12px;
+  color: #666;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.filter-status-label {
+  margin-top: 6px;
+}
+
+.filter-select {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #333;
+  background: #fff;
+  cursor: pointer;
+}
+
+.filter-select:focus {
+  outline: none;
+  border-color: #4a90d9;
+}
+
+.sidebar-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+  flex-shrink: 0;
+}
+
+.sidebar-btn {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.sidebar-btn:hover:not(:disabled) {
+  background: #e9ecef;
+}
+
+.sidebar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sidebar-btn-on {
+  background: #e8f5e9;
+  border-color: #4caf50;
+  color: #2e7d32;
+}
+
+.sidebar-btn-on:hover:not(:disabled) {
+  background: #c8e6c9;
+}
+
+.sidebar-btn-off {
+  background: #fff3e0;
+  border-color: #ff9800;
+  color: #e65100;
+}
+
+.sidebar-btn-off:hover:not(:disabled) {
+  background: #ffe0b2;
+}
+
+.region-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.region-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  transition: background-color 0.15s;
+}
+
+.region-item:hover {
+  background: #f5f5f5;
+}
+
+.region-item.selected {
+  background: #e3f2fd;
+  border-left-color: #4a90d9;
+}
+
+.region-item .region-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 3px;
+  margin-right: 8px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.region-item .region-icon.icon-on {
+  background: #333;
+}
+
+.region-item .region-icon.icon-off {
+  background: #bbb;
+}
+
+.region-item .region-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.region-item .region-type {
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.region-item .region-meta {
+  font-size: 11px;
+  color: #999;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.region-item .region-page {
+  font-size: 11px;
+  color: #999;
+  flex-shrink: 0;
+  margin-left: 6px;
+}
+
+/* PII type color badges */
+.region-item .region-type.type-name { color: #1565c0; }
+.region-item .region-type.type-address { color: #2e7d32; }
+.region-item .region-type.type-phone { color: #6a1b9a; }
+.region-item .region-type.type-email { color: #c62828; }
+.region-item .region-type.type-birthDate { color: #e65100; }
+.region-item .region-type.type-myNumber { color: #ad1457; }
+.region-item .region-type.type-corporateNumber { color: #00695c; }
+.region-item .region-type.type-custom { color: #555; }
+
+/* Empty region list message */
+.region-list-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: #999;
+  font-size: 13px;
 }
 
 #viewer {
@@ -377,6 +586,33 @@ footer {
   font-size: 12px;
   border-radius: 3px;
   border: 1px solid #ffc107;
+}
+
+/* Watermark Overlay */
+.watermark-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 500;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.watermark-overlay span {
+  display: block;
+  color: rgba(220, 20, 20, 0.18);
+  font-size: 72px;
+  font-weight: 800;
+  white-space: nowrap;
+  transform: rotate(-45deg);
+  letter-spacing: 8px;
+  user-select: none;
+  text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.05);
 }
 
 /* Debug Overlay */
