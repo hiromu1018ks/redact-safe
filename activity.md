@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 3 / 25
-**Current Task:** Task 3 - JSON-Linesロギングシステムとハッシュチェーン (完了)
+**Tasks Completed:** 4 / 25
+**Current Task:** Task 4 - JSONベースの状態管理システムと座標系ユーティリティ (完了)
 
 ---
 
@@ -91,3 +91,40 @@
 - `npm run build` - 成功
 
 **課題:** ブラウザでの動作確認はTauri dev serverの起動権限が未承認のため未実施。ビルド成功で代替確認。
+
+### 2026-04-21 - Task 4: JSONベースの状態管理システムと座標系ユーティリティ
+
+**変更内容:**
+- `src-tauri/src/document_state.rs` 作成 - ドキュメント状態管理モジュール実装
+  - データ構造定義: `DocumentStatus` (Draft/Confirmed/Finalized), `RegionType` (Name/Address/Phone/Email/BirthDate/MyNumber/CorporateNumber/Custom), `RegionSource` (Auto/Manual), `CoordinateSystem`, `Region`, `PageInfo`, `HistoryEntry`, `MaskingDocument`
+  - CRUD操作: 新規作成、JSONファイルからの読込/書込、ページ追加、リージョン追加/切替/削除/BBox更新、一括ON/OFF
+  - 状態遷移ロジック: draft→confirmed（確認承認）、confirmed→draft（差し戻し）、confirmed→finalized（確定）、finalizedは不可逆
+  - 各遷移でhistoryに自動記録、差し戻し時はrevision自動インクリメント
+  - 編集制約: confirmed/finalized状態ではリージョン操作不可
+  - 12個のRust単体テスト作成（全テスト通過）
+- `src-tauri/src/lib.rs` 更新 - Tauriコマンド追加
+  - `create_document`, `get_document`, `get_document_status`, `get_document_summary`
+  - `add_page`, `add_region`, `toggle_region`, `remove_region`, `update_region_bbox`, `set_all_regions_enabled`
+  - `confirm_document`, `rollback_document`, `finalize_document`
+  - `save_document`, `load_document`
+  - `DocumentState` 状態管理をアプリに統合
+- `python-worker/coord_utils.py` 作成 - 座標変換ユーティリティ
+  - `pdf_point_to_pixel` / `pixel_to_pdf_point` - PDF point ↔ pixel 変換
+  - `bbox_pdf_point_to_pixel` / `bbox_pixel_to_pdf_point` - bbox変換
+  - `rotate_bbox` - ページ回転補正（0°/90°/180°/270°対応）
+- `python-worker/worker.py` 更新 - 座標変換JSON-RPCコマンド追加
+  - `pdf_point_to_pixel`, `pixel_to_pdf_point`, `bbox_pdf_to_pixel`, `bbox_pixel_to_pdf`, `rotate_bbox`
+  - バージョンを0.2.0に更新
+- `python-worker/tests/test_coord_utils.py` 作成 - 座標変換単体テスト（20テストケース）
+- `index.html` 更新 - Document State Testパネル追加
+- `src/main.js` 更新 - ドキュメント状態テストUIロジック追加
+- `src/styles.css` 更新 - テスト結果テキストスタイル追加
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ)
+- `cargo test` (src-tauri/) - 成功 (12 tests passed)
+- `npm run build` - 成功
+- `npm run tauri dev` - 成功 (localhost:1420 で起動確認)
+
+**課題:** Pythonがシステムにインストールされていないため、Python単体テストは未実施。Python環境導入後に実行必要。ブラウザ動作確認は権限未承認のためビルド成功で代替。

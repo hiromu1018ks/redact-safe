@@ -204,3 +204,10 @@ footer {
   font-size: 13px;
   color: #666;
 }
+
+.doc-result-text {
+  font-size: 13px;
+  color: #333;
+  max-width: 400px;
+  word-break: break-all;
+}

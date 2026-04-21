@@ -1,7 +1,9 @@
 mod audit_log;
+mod document_state;
 mod python_worker;
 
 use audit_log::{AuditLogger, AuditRecord};
+use document_state::{MaskingDocument, Region};
 use python_worker::{PingResponse, PythonWorker, WorkerStatus};
 use std::sync::Mutex;
 use tauri::State;
@@ -9,6 +11,8 @@ use tauri::State;
 struct WorkerState(Mutex<Option<PythonWorker>>);
 
 struct AuditState(Mutex<AuditLogger>);
+
+struct DocumentState(Mutex<Option<MaskingDocument>>);
 
 #[tauri::command]
 fn worker_ping(
@@ -144,6 +148,204 @@ fn verify_log_chain(
     AuditLogger::verify_chain(&log_path)
 }
 
+// --- Document State Commands ---
+
+/// Create a new masking document for a source PDF.
+#[tauri::command]
+fn create_document(
+    state: State<DocumentState>,
+    source_file: String,
+    source_hash: String,
+) -> Result<String, String> {
+    let doc = MaskingDocument::new(&source_file, &source_hash);
+    let doc_id = doc.document_id.clone();
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *guard = Some(doc);
+    Ok(doc_id)
+}
+
+/// Get the current document as JSON.
+#[tauri::command]
+fn get_document(state: State<DocumentState>) -> Result<Option<serde_json::Value>, String> {
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    match guard.as_ref() {
+        Some(doc) => {
+            let json = serde_json::to_value(doc)
+                .map_err(|e| format!("Failed to serialize document: {}", e))?;
+            Ok(Some(json))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Get the status of the current document.
+#[tauri::command]
+fn get_document_status(state: State<DocumentState>) -> Result<Option<String>, String> {
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    Ok(guard.as_ref().map(|doc| doc.status.as_str().to_string()))
+}
+
+/// Add a page to the current document.
+#[tauri::command]
+fn add_page(
+    state: State<DocumentState>,
+    page: u32,
+    width_pt: f64,
+    height_pt: f64,
+    rotation_deg: u16,
+    extraction_path: String,
+) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_mut().ok_or("No document loaded")?;
+    if !doc.status.is_editable() {
+        return Err(format!("Cannot modify document in '{}' status", doc.status.as_str()));
+    }
+    doc.add_page(page, width_pt, height_pt, rotation_deg, &extraction_path);
+    Ok(())
+}
+
+/// Add a masking region to a page.
+#[tauri::command]
+fn add_region(
+    state: State<DocumentState>,
+    page_num: u32,
+    region: Region,
+) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_mut().ok_or("No document loaded")?;
+    if !doc.status.is_editable() {
+        return Err(format!("Cannot modify document in '{}' status", doc.status.as_str()));
+    }
+    doc.add_region(page_num, region)
+}
+
+/// Toggle a region's enabled state.
+#[tauri::command]
+fn toggle_region(
+    state: State<DocumentState>,
+    page_num: u32,
+    region_id: String,
+) -> Result<bool, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_mut().ok_or("No document loaded")?;
+    if !doc.status.is_editable() {
+        return Err(format!("Cannot modify document in '{}' status", doc.status.as_str()));
+    }
+    doc.toggle_region(page_num, &region_id)
+}
+
+/// Remove a masking region.
+#[tauri::command]
+fn remove_region(
+    state: State<DocumentState>,
+    page_num: u32,
+    region_id: String,
+) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_mut().ok_or("No document loaded")?;
+    if !doc.status.is_editable() {
+        return Err(format!("Cannot modify document in '{}' status", doc.status.as_str()));
+    }
+    doc.remove_region(page_num, &region_id)
+}
+
+/// Update a region's bounding box.
+#[tauri::command]
+fn update_region_bbox(
+    state: State<DocumentState>,
+    page_num: u32,
+    region_id: String,
+    bbox: [f64; 4],
+) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_mut().ok_or("No document loaded")?;
+    if !doc.status.is_editable() {
+        return Err(format!("Cannot modify document in '{}' status", doc.status.as_str()));
+    }
+    doc.update_region_bbox(page_num, &region_id, bbox)
+}
+
+/// Set all regions on a page (or all pages) to enabled/disabled.
+#[tauri::command]
+fn set_all_regions_enabled(
+    state: State<DocumentState>,
+    page_num: Option<u32>,
+    enabled: bool,
+) -> Result<u32, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_mut().ok_or("No document loaded")?;
+    if !doc.status.is_editable() {
+        return Err(format!("Cannot modify document in '{}' status", doc.status.as_str()));
+    }
+    doc.set_all_regions_enabled(page_num, enabled)
+}
+
+/// Transition document to confirmed status.
+#[tauri::command]
+fn confirm_document(state: State<DocumentState>, user: String) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_mut().ok_or("No document loaded")?;
+    doc.confirm(&user)
+}
+
+/// Rollback document from confirmed to draft.
+#[tauri::command]
+fn rollback_document(state: State<DocumentState>, user: String) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_mut().ok_or("No document loaded")?;
+    doc.rollback(&user)
+}
+
+/// Transition document to finalized status.
+#[tauri::command]
+fn finalize_document(state: State<DocumentState>, user: String) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_mut().ok_or("No document loaded")?;
+    doc.finalize(&user)
+}
+
+/// Save document to a JSON file.
+#[tauri::command]
+fn save_document(state: State<DocumentState>, path: String) -> Result<(), String> {
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_ref().ok_or("No document loaded")?;
+    doc.save_to_file(std::path::Path::new(&path))
+}
+
+/// Load document from a JSON file.
+#[tauri::command]
+fn load_document(state: State<DocumentState>, path: String) -> Result<serde_json::Value, String> {
+    let doc = MaskingDocument::load_from_file(std::path::Path::new(&path))?;
+    let json = serde_json::to_value(&doc)
+        .map_err(|e| format!("Failed to serialize document: {}", e))?;
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *guard = Some(doc);
+    Ok(json)
+}
+
+/// Get summary info about the current document.
+#[tauri::command]
+fn get_document_summary(state: State<DocumentState>) -> Result<Option<serde_json::Value>, String> {
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    match guard.as_ref() {
+        Some(doc) => {
+            let summary = serde_json::json!({
+                "document_id": doc.document_id,
+                "source_file": doc.source_file,
+                "status": doc.status.as_str(),
+                "revision": doc.revision,
+                "confirmed_by": doc.confirmed_by,
+                "finalized_by": doc.finalized_by,
+                "page_count": doc.pages.len(),
+                "total_regions": doc.total_regions_count(),
+                "enabled_regions": doc.enabled_regions_count(),
+            });
+            Ok(Some(summary))
+        }
+        None => Ok(None),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -152,6 +354,7 @@ pub fn run() {
         .manage(AuditState(Mutex::new(
             AuditLogger::new().expect("Failed to initialize audit logger"),
         )))
+        .manage(DocumentState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             init_worker,
             shutdown_worker,
@@ -160,6 +363,21 @@ pub fn run() {
             log_event,
             get_log_dir,
             verify_log_chain,
+            create_document,
+            get_document,
+            get_document_status,
+            add_page,
+            add_region,
+            toggle_region,
+            remove_region,
+            update_region_bbox,
+            set_all_regions_enabled,
+            confirm_document,
+            rollback_document,
+            finalize_document,
+            save_document,
+            load_document,
+            get_document_summary,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

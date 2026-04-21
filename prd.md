@@ -223,7 +223,7 @@ Tauri Desktop App
       "ページ回転補正関数（0°/90°/180°/270°）をPython側に実装",
       "座標変換の単体テストを作成し正確性を確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

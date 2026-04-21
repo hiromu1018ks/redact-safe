@@ -11,6 +11,13 @@ Message format (each line is a complete JSON message):
 import sys
 import json
 import traceback
+from coord_utils import (
+    pdf_point_to_pixel,
+    pixel_to_pdf_point,
+    bbox_pdf_point_to_pixel,
+    bbox_pixel_to_pdf_point,
+    rotate_bbox,
+)
 
 
 def send_response(msg_id: int, result: object = None, error: dict = None):
@@ -33,15 +40,64 @@ def handle_ping(params: dict) -> dict:
 def handle_get_version(params: dict) -> dict:
     """Return worker version and available methods."""
     return {
-        "version": "0.1.0",
+        "version": "0.2.0",
         "methods": list(HANDLERS.keys()),
     }
+
+
+def handle_pdf_point_to_pixel(params: dict) -> dict:
+    """Convert PDF point coordinates to pixel coordinates."""
+    x = params["x_pt"]
+    y = params["y_pt"]
+    dpi = params.get("dpi", 300.0)
+    x_px, y_px = pdf_point_to_pixel(x, y, dpi)
+    return {"x_px": x_px, "y_px": y_px}
+
+
+def handle_pixel_to_pdf_point(params: dict) -> dict:
+    """Convert pixel coordinates to PDF point coordinates."""
+    x = params["x_px"]
+    y = params["y_px"]
+    dpi = params.get("dpi", 300.0)
+    x_pt, y_pt = pixel_to_pdf_point(x, y, dpi)
+    return {"x_pt": x_pt, "y_pt": y_pt}
+
+
+def handle_bbox_pdf_to_pixel(params: dict) -> dict:
+    """Convert a bounding box from PDF points to pixels."""
+    bbox = params["bbox"]
+    dpi = params.get("dpi", 300.0)
+    result = bbox_pdf_point_to_pixel(bbox, dpi)
+    return {"bbox_px": result}
+
+
+def handle_bbox_pixel_to_pdf(params: dict) -> dict:
+    """Convert a bounding box from pixels to PDF points."""
+    bbox = params["bbox"]
+    dpi = params.get("dpi", 300.0)
+    result = bbox_pixel_to_pdf_point(bbox, dpi)
+    return {"bbox_pt": result}
+
+
+def handle_rotate_bbox(params: dict) -> dict:
+    """Correct a bounding box for page rotation."""
+    bbox = params["bbox"]
+    rotation_deg = params["rotation_deg"]
+    page_width_pt = params["page_width_pt"]
+    page_height_pt = params["page_height_pt"]
+    result = rotate_bbox(bbox, rotation_deg, page_width_pt, page_height_pt)
+    return {"bbox": result}
 
 
 # Method dispatch table
 HANDLERS = {
     "ping": handle_ping,
     "get_version": handle_get_version,
+    "pdf_point_to_pixel": handle_pdf_point_to_pixel,
+    "pixel_to_pdf_point": handle_pixel_to_pdf_point,
+    "bbox_pdf_to_pixel": handle_bbox_pdf_to_pixel,
+    "bbox_pixel_to_pdf": handle_bbox_pixel_to_pdf,
+    "rotate_bbox": handle_rotate_bbox,
 }
 
 
