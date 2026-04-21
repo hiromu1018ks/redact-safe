@@ -127,6 +127,43 @@
       </div>
     </div>
 
+    <!-- Password Dialog (for encrypted PDFs) -->
+    <div id="password-dialog" class="modal-overlay" style="display:none">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>パスワード入力</h3>
+        </div>
+        <div class="modal-body">
+          <p>このPDFはパスワードで保護されています。</p>
+          <p class="modal-hint">PDFのパスワードを入力してください。</p>
+          <label for="pdf-password-input" class="modal-label">パスワード:</label>
+          <input type="password" id="pdf-password-input" class="modal-input" autocomplete="off" />
+          <p id="password-error" class="modal-error" style="display:none">パスワードが正しくありません。もう一度入力してください。</p>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-password-cancel" class="modal-btn modal-btn-secondary">キャンセル</button>
+          <button id="btn-password-ok" class="modal-btn modal-btn-primary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Signature Warning Dialog -->
+    <div id="signature-dialog" class="modal-overlay" style="display:none">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>デジタル署名の検出</h3>
+        </div>
+        <div class="modal-body">
+          <p>このPDFにはデジタル署名が含まれています。</p>
+          <p class="modal-hint">黒塗り確定処理によりデジタル署名は除去されます。処理を続行しますか？</p>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-signature-cancel" class="modal-btn modal-btn-secondary">キャンセル</button>
+          <button id="btn-signature-continue" class="modal-btn modal-btn-primary">続行する</button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

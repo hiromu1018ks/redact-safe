@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 5 / 25
-**Current Task:** Task 5 - PDF.jsによるPDFビューアーとマルチページナビゲーション (完了)
+**Tasks Completed:** 6 / 25
+**Current Task:** Task 6 - ファイル入力機能（ファイルピッカー・ドラッグ&ドロップ・暗号化PDF・署名付きPDF） (完了)
 
 ---
 
@@ -171,3 +171,49 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** ブラウザ動作確認は権限未承認のため未実施。10ページテストPDFでの動作確認は手動テストが必要。
+
+### 2026-04-21 - Task 6: ファイル入力機能（ファイルピッカー・ドラッグ&ドロップ・暗号化PDF・署名付きPDF）
+
+**変更内容:**
+- `python-worker/worker.py` 更新 - PDFメタデータ検出メソッド追加
+  - `handle_analyze_pdf`: PyMuPDFでPDF解析（暗号化検出、署名検出、ページ情報、SHA-256ハッシュ、メタデータ）
+  - `handle_decrypt_pdf`: パスワード付きPDFの復号試行
+  - `_open_pdf` ヘルパー: base64デコード→PyMuPDFオープン→パスワード認証
+  - バージョンを0.3.0に更新
+- `src-tauri/src/lib.rs` 更新 - Tauriコマンド追加
+  - `analyze_pdf`: Pythonワーカー経由でPDF解析（base64エンコードされたPDFデータ + パスワード）
+  - `decrypt_pdf`: Pythonワーカー経由でPDF復号
+  - invoke_handlerに新コマンドを登録
+- `index.html` 更新 - モーダルダイアログ追加
+  - パスワード入力ダイアログ (`#password-dialog`): 暗号化PDF検出時に表示
+  - 署名付きPDF警告ダイアログ (`#signature-dialog`): デジタル署名検出時に表示
+- `src/styles.css` 更新 - モーダル・ドロップゾーンスタイル追加
+  - `.modal-overlay`: フルスクリーンセミトランスペアレント背景
+  - `.modal-content`: 中央配置の白いカード（420px幅）
+  - `.modal-btn-primary` / `.modal-btn-secondary`: プライマリ（青）/セカンダリ（白）ボタン
+  - `#pdf-container.drag-over`: ドラッグオーバー時の枠線 + ドロップテキストオーバーレイ
+- `src/main.js` 更新 - ファイルオープンフロー全面改修
+  - `showPasswordDialog()`: Promiseベースのパスワード入力ダイアログ（Enter/Escape対応）
+  - `showSignatureDialog()`: Promiseベースの署名警告ダイアログ
+  - `arrayBufferToBase64()`: ArrayBuffer → base64エンコードユーティリティ
+  - `analyzePdfWithWorker()`: Pythonワーカー経由のPDF解析呼び出し
+  - `decryptPdfWithWorker()`: Pythonワーカー経由のPDF復号呼び出し
+  - `loadPdfWithAnalysis()`: メインPDF読込フロー
+    1. PythonワーカーでPDF解析（暗号化・署名検出）
+    2. 暗号化PDFの場合: パスワードダイアログ表示（ループで正しいパスワード入力まで）
+    3. 署名付きPDFの場合: 警告ダイアログ表示（続行/キャンセル）
+    4. 解析成功時: SHA-256ハッシュでドキュメント状態作成 + ページ情報追加
+    5. PDF.jsでPDFビューアーに読み込み
+  - `openPdfFile()` / ドラッグ&ドロップ: `loadPdfWithAnalysis()` を使用するよう変更
+  - `pdfViewer.onLoad` コールバック: `document_created` イベントを監査ログに記録
+  - ドラッグ&ドロップ: CSSクラス (`drag-over`) ベースに変更（インラインスタイルから移行）
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+- `npm run tauri dev` - アプリ起動成功
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** Pythonワーカーが未導入のため、暗号化/署名検出の実行時テストは未実施。Python環境導入後に動作確認が必要。

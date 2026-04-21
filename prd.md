@@ -248,7 +248,7 @@ Tauri Desktop App
       "PyMuPDFでPDFメタデータ（暗号化・署名の有無）を検出するPythonワーカー機能を実装",
       "PDF読込時にログ記録（file_openedイベント）されることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

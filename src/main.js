@@ -79,6 +79,26 @@ function initPdfViewer() {
         documentId: null,
         data: { file_name: fileName, num_pages: numPages },
       }).catch(() => {});
+
+      // Also try to get the document_id for logging
+      invoke("get_document_status").then((status) => {
+        if (status) {
+          invoke("get_document").then((doc) => {
+            if (doc) {
+              invoke("log_event", {
+                event: "document_created",
+                user: null,
+                documentId: doc.document_id,
+                data: {
+                  file_name: fileName,
+                  num_pages: numPages,
+                  source_hash: doc.source_hash,
+                },
+              }).catch(() => {});
+            }
+          }).catch(() => {});
+        }
+      }).catch(() => {});
     }
 
     // Auto fit to width
@@ -123,6 +143,208 @@ function enablePdfControls(enabled) {
 // File Opening
 // ============================================================
 
+// --- Modal Dialog Helpers ---
+const passwordDialog = document.getElementById("password-dialog");
+const passwordInput = document.getElementById("pdf-password-input");
+const passwordError = document.getElementById("password-error");
+const btnPasswordOk = document.getElementById("btn-password-ok");
+const btnPasswordCancel = document.getElementById("btn-password-cancel");
+
+const signatureDialog = document.getElementById("signature-dialog");
+const btnSignatureContinue = document.getElementById("btn-signature-continue");
+const btnSignatureCancel = document.getElementById("btn-signature-cancel");
+
+function showPasswordDialog() {
+  return new Promise((resolve) => {
+    passwordInput.value = "";
+    passwordError.style.display = "none";
+    passwordDialog.style.display = "flex";
+    passwordInput.focus();
+
+    function cleanup() {
+      passwordDialog.style.display = "none";
+      btnPasswordOk.removeEventListener("click", onOk);
+      btnPasswordCancel.removeEventListener("click", onCancel);
+      passwordInput.removeEventListener("keydown", onKeydown);
+    }
+
+    function onOk() {
+      const pw = passwordInput.value;
+      cleanup();
+      resolve(pw);
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(null);
+    }
+
+    function onKeydown(e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        onOk();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    }
+
+    btnPasswordOk.addEventListener("click", onOk);
+    btnPasswordCancel.addEventListener("click", onCancel);
+    passwordInput.addEventListener("keydown", onKeydown);
+  });
+}
+
+function showPasswordError() {
+  passwordError.style.display = "block";
+  passwordInput.value = "";
+  passwordInput.focus();
+}
+
+function showSignatureDialog() {
+  return new Promise((resolve) => {
+    signatureDialog.style.display = "flex";
+
+    function cleanup() {
+      signatureDialog.style.display = "none";
+      btnSignatureContinue.removeEventListener("click", onContinue);
+      btnSignatureCancel.removeEventListener("click", onCancel);
+    }
+
+    function onContinue() {
+      cleanup();
+      resolve(true);
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(false);
+    }
+
+    btnSignatureContinue.addEventListener("click", onContinue);
+    btnSignatureCancel.addEventListener("click", onCancel);
+  });
+}
+
+// --- Array buffer to base64 ---
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+// --- PDF Analysis Flow ---
+async function analyzePdfWithWorker(pdfData) {
+  if (!isTauri) {
+    // Browser mode: no Python worker, skip analysis
+    return null;
+  }
+  try {
+    const base64 = arrayBufferToBase64(pdfData);
+    const result = await invoke("analyze_pdf", {
+      pdfDataBase64: base64,
+      password: null,
+    });
+    return result;
+  } catch (e) {
+    console.warn("PDF analysis via Python worker failed:", e);
+    return null;
+  }
+}
+
+async function decryptPdfWithWorker(pdfData, password) {
+  if (!isTauri) {
+    return null;
+  }
+  try {
+    const base64 = arrayBufferToBase64(pdfData);
+    const result = await invoke("decrypt_pdf", {
+      pdfDataBase64: base64,
+      password: password,
+    });
+    return result;
+  } catch (e) {
+    console.warn("PDF decrypt via Python worker failed:", e);
+    return null;
+  }
+}
+
+// --- Main PDF Load Flow ---
+async function loadPdfWithAnalysis(arrayBuffer, fileName) {
+  // Step 1: Analyze PDF via Python worker (if available)
+  const analysis = await analyzePdfWithWorker(arrayBuffer);
+
+  if (analysis) {
+    // Step 2: Check encryption
+    if (analysis.needs_pass) {
+      // Show password dialog (loop until correct or cancel)
+      while (true) {
+        const password = await showPasswordDialog();
+        if (password === null) {
+          // User cancelled
+          return;
+        }
+
+        const decryptResult = await decryptPdfWithWorker(arrayBuffer, password);
+        if (decryptResult && decryptResult.success) {
+          break;
+        } else {
+          showPasswordError();
+        }
+      }
+    }
+
+    // Step 3: Check for digital signatures
+    if (analysis.has_signatures) {
+      const proceed = await showSignatureDialog();
+      if (!proceed) {
+        return;
+      }
+    }
+
+    // Step 4: Create document state with hash
+    if (analysis.sha256) {
+      try {
+        const docId = await invoke("create_document", {
+          sourceFile: fileName,
+          sourceHash: `sha256:${analysis.sha256}`,
+        });
+        console.log("Document created:", docId);
+
+        // Add pages from analysis
+        if (analysis.pages && Array.isArray(analysis.pages)) {
+          for (const pageInfo of analysis.pages) {
+            try {
+              await invoke("add_page", {
+                page: pageInfo.page,
+                widthPt: pageInfo.width_pt,
+                heightPt: pageInfo.height_pt,
+                rotationDeg: pageInfo.rotation_deg,
+                extractionPath: "unknown",
+              });
+            } catch (pageErr) {
+              console.warn(`Failed to add page ${pageInfo.page}:`, pageErr);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to create document state:", e);
+      }
+    }
+  }
+
+  // Step 5: Load PDF into viewer
+  try {
+    await pdfViewer.loadPdf(arrayBuffer, fileName);
+  } catch (e) {
+    console.error("Failed to load PDF:", e);
+    alert("PDFの読み込みに失敗しました: " + e.message);
+  }
+}
+
 async function openPdfFile() {
   let result = null;
 
@@ -166,12 +388,7 @@ async function openPdfFile() {
 
   if (!result) return;
 
-  try {
-    await pdfViewer.loadPdf(result.data, result.fileName);
-  } catch (e) {
-    console.error("Failed to load PDF:", e);
-    alert("PDFの読み込みに失敗しました: " + e.message);
-  }
+  await loadPdfWithAnalysis(result.data, result.fileName);
 }
 
 // ============================================================
@@ -241,19 +458,19 @@ document.addEventListener("DOMContentLoaded", () => {
   pdfContainer.addEventListener("dragover", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    pdfContainer.style.outline = "3px dashed #4a90d9";
+    pdfContainer.classList.add("drag-over");
   });
 
   pdfContainer.addEventListener("dragleave", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    pdfContainer.style.outline = "";
+    pdfContainer.classList.remove("drag-over");
   });
 
   pdfContainer.addEventListener("drop", async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    pdfContainer.style.outline = "";
+    pdfContainer.classList.remove("drag-over");
 
     const file = e.dataTransfer.files[0];
     if (!file) return;
@@ -265,7 +482,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const arrayBuffer = await file.arrayBuffer();
-      await pdfViewer.loadPdf(arrayBuffer, file.name);
+      await loadPdfWithAnalysis(arrayBuffer, file.name);
     } catch (err) {
       console.error("Failed to load dropped PDF:", err);
       alert("PDFの読み込みに失敗しました: " + err.message);

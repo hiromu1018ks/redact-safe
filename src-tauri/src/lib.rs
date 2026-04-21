@@ -346,6 +346,50 @@ fn get_document_summary(state: State<DocumentState>) -> Result<Option<serde_json
     }
 }
 
+// --- PDF Analysis Commands ---
+
+/// Analyze a PDF file via Python worker: detect encryption, signatures, page info.
+#[tauri::command]
+fn analyze_pdf(
+    state: State<WorkerState>,
+    pdf_data_base64: String,
+    password: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+        "password": password.unwrap_or_default(),
+    });
+
+    let result = worker.call("analyze_pdf", Some(params))?;
+    Ok(result)
+}
+
+/// Attempt to decrypt a PDF with a password via Python worker.
+#[tauri::command]
+fn decrypt_pdf(
+    state: State<WorkerState>,
+    pdf_data_base64: String,
+    password: String,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+        "password": password,
+    });
+
+    let result = worker.call("decrypt_pdf", Some(params))?;
+    Ok(result)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -379,6 +423,8 @@ pub fn run() {
             save_document,
             load_document,
             get_document_summary,
+            analyze_pdf,
+            decrypt_pdf,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

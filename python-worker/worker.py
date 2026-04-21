@@ -10,6 +10,8 @@ Message format (each line is a complete JSON message):
 
 import sys
 import json
+import hashlib
+import base64
 import traceback
 from coord_utils import (
     pdf_point_to_pixel,
@@ -18,6 +20,144 @@ from coord_utils import (
     bbox_pixel_to_pdf_point,
     rotate_bbox,
 )
+
+
+def _open_pdf(params: dict):
+    """Open a PDF from base64-encoded data. Returns (doc, pdf_bytes)."""
+    import fitz
+
+    pdf_data = params.get("pdf_data", "")
+    password = params.get("password", "")
+    pdf_bytes = base64.b64decode(pdf_data)
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    if doc.is_encrypted and not doc.needs_pass:
+        pass  # no password needed (owner password set but not required)
+    elif doc.is_encrypted and doc.needs_pass:
+        if not doc.authenticate(password):
+            doc.close()
+            raise ValueError("PDF_PASSWORD_INCORRECT")
+    return doc, pdf_bytes
+
+
+def handle_analyze_pdf(params: dict) -> dict:
+    """Analyze PDF metadata: encryption, signatures, page count, etc."""
+    import fitz
+
+    doc, pdf_bytes = _open_pdf(params)
+
+    try:
+        is_encrypted = doc.is_encrypted
+        needs_pass = doc.needs_pass
+        page_count = len(doc)
+
+        # Check for digital signatures
+        has_signatures = False
+        signature_names = []
+        for page_num in range(page_count):
+            page = doc[page_num]
+            for widget in page.widgets():
+                if widget.field_type_string == "Signature":
+                    has_signatures = True
+                    signature_names.append(widget.field_name or f"sig_page{page_num + 1}")
+            # Also check for signature annotations
+            for annot in page.annots() or []:
+                if annot.type[0] == fitz.PDF_ANNOT_WIDGET:
+                    # Already checked via widgets
+                    pass
+
+        # Additional check: look for signature in document catalog
+        try:
+            catalog = doc.pdf_catalog()
+            if catalog is not None:
+                acro_form = catalog.get("AcroForm")
+                if acro_form is not None:
+                    sig_fields = acro_form.get("Fields", [])
+                    for field_ref in sig_fields:
+                        field = doc.xref_object(field_ref)
+                        if "Sig" in field:
+                            has_signatures = True
+        except Exception:
+            pass
+
+        # Compute SHA-256 hash of source file
+        sha256_hash = hashlib.sha256(pdf_bytes).hexdigest()
+
+        # Get metadata
+        metadata = doc.metadata
+        title = metadata.get("title", "") or ""
+        author = metadata.get("author", "") or ""
+        creator = metadata.get("creator", "") or ""
+
+        # Get page dimensions for first page
+        first_page = doc[0]
+        page_info = []
+        for i in range(page_count):
+            p = doc[i]
+            page_info.append({
+                "page": i + 1,
+                "width_pt": round(p.rect.width, 2),
+                "height_pt": round(p.rect.height, 2),
+                "rotation_deg": p.rotation,
+            })
+
+        return {
+            "is_encrypted": is_encrypted,
+            "needs_pass": needs_pass,
+            "has_signatures": has_signatures,
+            "signature_names": signature_names,
+            "page_count": page_count,
+            "sha256": sha256_hash,
+            "metadata": {
+                "title": title,
+                "author": author,
+                "creator": creator,
+            },
+            "pages": page_info,
+        }
+    finally:
+        doc.close()
+
+
+def handle_decrypt_pdf(params: dict) -> dict:
+    """Attempt to decrypt a PDF with a password. Returns analysis result or error."""
+    import fitz
+
+    doc, pdf_bytes = _open_pdf(params)
+
+    try:
+        if not doc.is_encrypted:
+            return {
+                "success": True,
+                "is_encrypted": False,
+                "needs_pass": False,
+                "page_count": len(doc),
+                "sha256": hashlib.sha256(pdf_bytes).hexdigest(),
+            }
+
+        # Already authenticated in _open_pdf
+        page_count = len(doc)
+        sha256_hash = hashlib.sha256(pdf_bytes).hexdigest()
+
+        page_info = []
+        for i in range(page_count):
+            p = doc[i]
+            page_info.append({
+                "page": i + 1,
+                "width_pt": round(p.rect.width, 2),
+                "height_pt": round(p.rect.height, 2),
+                "rotation_deg": p.rotation,
+            })
+
+        return {
+            "success": True,
+            "is_encrypted": True,
+            "needs_pass": False,
+            "page_count": page_count,
+            "sha256": sha256_hash,
+            "pages": page_info,
+        }
+    finally:
+        doc.close()
 
 
 def send_response(msg_id: int, result: object = None, error: dict = None):
@@ -40,7 +180,7 @@ def handle_ping(params: dict) -> dict:
 def handle_get_version(params: dict) -> dict:
     """Return worker version and available methods."""
     return {
-        "version": "0.2.0",
+        "version": "0.3.0",
         "methods": list(HANDLERS.keys()),
     }
 
@@ -98,6 +238,8 @@ HANDLERS = {
     "bbox_pdf_to_pixel": handle_bbox_pdf_to_pixel,
     "bbox_pixel_to_pdf": handle_bbox_pixel_to_pdf,
     "rotate_bbox": handle_rotate_bbox,
+    "analyze_pdf": handle_analyze_pdf,
+    "decrypt_pdf": handle_decrypt_pdf,
 }
 
 
