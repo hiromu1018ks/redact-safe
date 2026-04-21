@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 1 / 25
-**Current Task:** Task 1 - Tauri v2プロジェクト初期化 (完了)
+**Tasks Completed:** 3 / 25
+**Current Task:** Task 3 - JSON-Linesロギングシステムとハッシュチェーン (完了)
 
 ---
 
@@ -31,3 +31,63 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** なし
+
+### 2026-04-21 - Task 2: Pythonワーカーの依存関係設定とstdin/stdout通信確立
+
+**変更内容:**
+- `python-worker/requirements.txt` 作成（PyMuPDF, Pillow, paddleocr, paddlepaddle, fugashi, unidic-lite, pyyaml）
+- `python-worker/worker.py` 作成 - stdin/stdoutベースのJSON-RPC 2.0通信プロトコル実装
+  - `ping` コマンド: メッセージのエコー応答
+  - `get_version` コマンド: ワーカー バージョンと利用可能メソッド一覧
+  - エラーハンドリング: JSON parse error, method not found, internal error
+- `src-tauri/src/python_worker.rs` 作成 - Pythonワーカープロセス管理モジュール
+  - Pythonパス自動検出（python3/python/py順）
+  - worker.pyパス解決（dev/production両対応）
+  - JSON-RPCリクエスト送受信（stdin/stdout）
+  - プロセス生存確認・kill機能
+- `src-tauri/src/lib.rs` 更新 - Tauriコマンド追加
+  - `init_worker`: Pythonワーカープロセス起動
+  - `shutdown_worker`: ワーカー終了
+  - `worker_ping`: ping送信
+  - `worker_get_status`: ワーカー接続状態確認
+- `src-tauri/Cargo.toml` 更新 - tauri-plugin-shell, uuid 追加
+- `src-tauri/capabilities/default.json` 更新 - shell権限追加
+- `index.html` 更新 - Python Workerテストパネル追加（Initialize Worker / Send Ping）
+- `src/styles.css` 更新 - テストパネルUIスタイル追加
+- `src/main.js` 更新 - ワーカー初期化・ping通信のロジック実装
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (warningなし)
+- `cargo clippy` (src-tauri/) - 成功 (warningなし)
+- `npm run build` - 成功 (dist/ にビルド出力)
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** Pythonがシステムにインストールされていないため、実際のワーカー通信テストは未実施。Python環境導入後に実行時テストが必要。
+
+### 2026-04-21 - Task 3: JSON-Lines形式のロギングシステムとハッシュチェーン
+
+**変更内容:**
+- `src-tauri/src/audit_log.rs` 作成 - 監査ログモジュール実装
+  - JSON-Lines形式のログ出力（日次ローテーション対応）
+  - SHA-256ハッシュチェーン（各レコードにprev_hash + hash、genesisハッシュ起点）
+  - 日次ルートハッシュを `root_hashes.jsonl` に別保存
+  - ログ保存先: `%APPDATA%/RedactSafe/logs/`（`dirs::data_dir()` 使用）
+  - ログファイル名: `audit_YYYY-MM-DD.jsonl`
+  - チェーン整合性検証機能（`verify_chain`）
+  - OSユーザー名自動取得（`get_current_user`）
+- `src-tauri/src/lib.rs` 更新 - Tauriコマンド追加
+  - `log_event`: 監査イベント記録（event, user, document_id, data）
+  - `get_log_dir`: ログディレクトリパス取得
+  - `verify_log_chain`: 指定日のログチェーン検証
+  - `AuditState` 状態管理をアプリに統合
+- `src-tauri/Cargo.toml` 更新 - 依存関係追加（chrono, sha2, hex, dirs）
+- `index.html` 更新 - Audit Logテストパネル追加
+- `src/main.js` 更新 - 監査ログテストUIロジック追加
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功
+- `cargo clippy` (src-tauri/) - 成功 (warningなし)
+- `npm run build` - 成功
+
+**課題:** ブラウザでの動作確認はTauri dev serverの起動権限が未承認のため未実施。ビルド成功で代替確認。

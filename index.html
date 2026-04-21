@@ -27,6 +27,30 @@
           </div>
           <div id="pdf-container">
             <p>ファイルをドラッグ＆ドロップ、または「ファイル」メニューからPDFを選択してください</p>
+            <div id="worker-test-panel" class="worker-test">
+              <h3>Python Worker Test</h3>
+              <div class="worker-test-row">
+                <button id="btn-init-worker">Initialize Worker</button>
+                <span id="worker-status">Not initialized</span>
+              </div>
+              <div class="worker-test-row">
+                <button id="btn-ping" disabled>Send Ping</button>
+                <input type="text" id="ping-message" placeholder="Message (optional)" value="hello" />
+                <span id="ping-result"></span>
+              </div>
+            </div>
+            <div id="audit-log-test-panel" class="worker-test">
+              <h3>Audit Log Test</h3>
+              <div class="worker-test-row">
+                <button id="btn-log-event">Log Test Event</button>
+                <button id="btn-verify-chain">Verify Chain</button>
+                <span id="audit-log-result"></span>
+              </div>
+              <div class="worker-test-row">
+                <label>Log dir:</label>
+                <span id="log-dir">-</span>
+              </div>
+            </div>
           </div>
         </section>
       </main>

@@ -198,7 +198,7 @@ Tauri Desktop App
       "フロントエンドからRust経由でPythonワーカーにpingを送り応答を確認するテストUIを作成",
       "dev serverを起動して通信が確立されていることをブラウザで確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "setup",
@@ -210,7 +210,7 @@ Tauri Desktop App
       "ログ保存先を %APPDATA%/RedactSafe/logs/ に設定",
       "Tauriコマンド経由でログ記録を呼び出せるようにする"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "setup",
