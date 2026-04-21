@@ -24,7 +24,22 @@
       "Bash(git status:*)",
       "Bash(git log:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(cargo:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo add:*)",
+      "Bash(rustup:*)",
+      "Bash(rustc:*)",
+      "Bash(npm run tauri:*)",
+      "Bash(npx tauri:*)",
+      "Bash(npm install:*)",
+      "Bash(pip install:*)",
+      "Bash(pip3:*)",
+      "Bash(python3:*)",
+      "Bash(pyinstaller:*)"
     ],
     "deny": [
       "Bash(sudo:*)",

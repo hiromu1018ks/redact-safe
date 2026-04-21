@@ -6,15 +6,27 @@ First read activity.md to see what was recently accomplished.
 
 ## Start the Application
 
-<!-- START_COMMAND_PLACEHOLDER: Update this section after creating your PRD -->
-Start the site locally. Use the appropriate command for your tech stack:
-- `npm run dev` (for Next.js, Vite, or similar)
-- `pnpm dev` (if using pnpm)
-- `bun dev` (if using Bun)
-- `python3 -m http.server 8000 --bind 127.0.0.1` (for static HTML)
+Start the Tauri development server:
+```
+npm run tauri dev
+```
 
-If the port is taken, try another port.
-<!-- END_START_COMMAND_PLACEHOLDER -->
+This starts both the Vite dev server (frontend) and the Tauri Rust backend concurrently.
+If the default port (typically 1420) is taken, Tauri will use another port.
+
+Build/lint commands:
+- `npm run build` — Build the frontend for production
+- `npm run tauri build` — Build the full Tauri app (generates Windows installer)
+- `cargo check` — Type-check Rust code
+- `cargo clippy` — Lint Rust code
+- `cargo test` — Run Rust tests
+
+Project-specific notes:
+- This is a Tauri v2 desktop app (Rust + Vanilla JS + Python worker)
+- Python worker runs as a local subprocess communicating via stdin/stdout JSON-RPC
+- PDF rendering uses PDF.js in the WebView2 frontend
+- All processing is offline (no network required)
+- Coordinate system: PDF point (1pt = 1/72 inch) as canonical unit
 
 ## Work on Tasks
 
@@ -23,9 +35,9 @@ Open prd.md and find the single highest priority task where `"passes": false`.
 Work on exactly ONE task:
 1. Implement the change according to the task steps
 2. Run any available checks:
-   - `npm run lint` (if available)
-   - `npm run typecheck` (if available)
-   - `npm run build` (if available)
+   - `cargo clippy` (Rust lint)
+   - `cargo check` (Rust type check)
+   - `npm run build` (frontend build)
 
 ## Verify in Browser
 
