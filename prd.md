@@ -186,7 +186,7 @@ Tauri Desktop App
       "cargo build でRustコアがコンパイル可能であることを確認",
       "npm install でフロントエンド開発環境が動作することを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "setup",

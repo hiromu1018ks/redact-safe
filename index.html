@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RedactSafe</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>RedactSafe</h1>
+        <nav>
+          <button id="menu-file">ファイル</button>
+          <button id="menu-settings">設定</button>
+          <button id="menu-help">ヘルプ</button>
+        </nav>
+      </header>
+      <main>
+        <aside id="sidebar">
+          <h2>検出一覧</h2>
+          <p>PDFファイルを読み込んでください</p>
+        </aside>
+        <section id="viewer">
+          <div id="warning-banner">
+            自動検出には漏れがある可能性があります。全ページを目視で確認してください
+          </div>
+          <div id="pdf-container">
+            <p>ファイルをドラッグ＆ドロップ、または「ファイル」メニューからPDFを選択してください</p>
+          </div>
+        </section>
+      </main>
+      <footer>
+        <div id="toolbar">
+          <button id="btn-all-on" disabled>全てON</button>
+          <button id="btn-all-off" disabled>全てOFF</button>
+          <span id="status-display">未読込</span>
+          <button id="btn-finalize" disabled>確定して出力</button>
+        </div>
+      </footer>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
