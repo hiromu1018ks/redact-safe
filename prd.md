@@ -517,7 +517,7 @@ Tauri Desktop App
       "処理後の安全PDFからデジタル署名が除去されていることを確認",
       "キャンセル選択で読み込みが中止されることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "integration",

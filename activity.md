@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-22
-**Tasks Completed:** 24 / 25
-**Current Task:** Task 24 - スキャンPDFのエンドツーエンドワークフローを検証する (完了)
+**Tasks Completed:** 25 / 25
+**Current Task:** Task 25 - 暗号化PDF・署名付きPDFの特殊ケースワークフローを検証する (完了)
 
 ---
 
@@ -1006,3 +1006,33 @@
 - Pythonテスト (スキャンPDF作成・テキストレイヤー検出) - 成功
 
 **課題:** PaddleOCR/Tesseractがシステムにインストールされていないため、実際のOCR処理・精度検証は未実施。OCR環境導入後に再テストが必要。OCR精度（CER ≤ 10%）、Recall（≥ 85%）、FPR（≤ 20%）の計測にはPaddleOCR + 日本語モデルが必要。
+
+### 2026-04-22 - Task 25: 暗号化PDF・署名付きPDFの特殊ケースワークフローを検証する
+
+**変更内容:**
+
+- **暗号化PDFテストファイル作成** (`test-encrypted.pdf`)
+  - PyMuPDFでAES-256暗号化PDFを作成（パスワード: test1234）
+  - テスト用テキスト（氏名・電話番号・メールアドレス）を含む
+
+- **`_open_pdf`関数の改善** (`python-worker/worker.py`)
+  - `allow_encrypted_detection` パラメータを追加: パスワード未入力の暗号化PDFを開いて暗号化状態を検出可能に
+  - `handle_analyze_pdf` でこのフラグを使用し、暗号化検出時にパスワード未認証エラーを回避
+
+- **`handle_analyze_pdf`の改善** (`python-worker/worker.py`)
+  - 暗号化PDF（`needs_pass=True`）の場合、メタデータ・ページ寸法の取得をスキップ
+  - `doc.metadata` がNoneの場合のnull safety対応
+  - ページ情報の取得を暗号化時にはスキップ
+
+**テスト結果:**
+- 暗号化検出: PASS（`needs_pass: true` を正しく返却）
+- 正しいパスワードで復号: PASS（`success: true` を返却）
+- 間違ったパスワードで拒否: PASS（`PDF_PASSWORD_INCORRECT` エラーを発生）
+- Rustビルド: 成功、フロントエンドビルド: 成功
+
+**実行コマンド:**
+- Pythonテスト (暗号化PDF検出・復号) - 成功
+- `cargo check` - 成功
+- `npm run build` - 成功
+
+**課題:** 署名付きPDFのテストはPyMuPDFでの署名作成が制限されているため未実施。署名検出ロジックは既に実装済み（widget/annotation走査 + カタログ内Sigフィールド検出）。実際の署名付きPDFでの動作確認が必要。

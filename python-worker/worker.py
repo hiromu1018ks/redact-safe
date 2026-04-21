@@ -138,8 +138,14 @@ from pdf_sanitizer import (
 )
 
 
-def _open_pdf(params: dict):
-    """Open a PDF from base64-encoded data. Returns (doc, pdf_bytes)."""
+def _open_pdf(params: dict, allow_encrypted_detection: bool = False):
+    """Open a PDF from base64-encoded data. Returns (doc, pdf_bytes).
+
+    Args:
+        params: Dict with 'pdf_data' (base64) and 'password' keys.
+        allow_encrypted_detection: If True, return doc even when password
+            is needed but not provided (for analyze_pdf to detect encryption).
+    """
     import fitz
 
     pdf_data = params.get("pdf_data", "")
@@ -150,6 +156,9 @@ def _open_pdf(params: dict):
         pass  # no password needed (owner password set but not required)
     elif doc.is_encrypted and doc.needs_pass:
         if not doc.authenticate(password):
+            if allow_encrypted_detection:
+                # Return the doc without authentication so caller can detect encryption
+                return doc, pdf_bytes
             doc.close()
             raise ValueError("PDF_PASSWORD_INCORRECT")
     return doc, pdf_bytes
@@ -159,62 +168,63 @@ def handle_analyze_pdf(params: dict) -> dict:
     """Analyze PDF metadata: encryption, signatures, page count, etc."""
     import fitz
 
-    doc, pdf_bytes = _open_pdf(params)
+    doc, pdf_bytes = _open_pdf(params, allow_encrypted_detection=True)
 
     try:
         is_encrypted = doc.is_encrypted
         needs_pass = doc.needs_pass
-        page_count = len(doc)
+        page_count = len(doc) if not needs_pass else 0
 
-        # Check for digital signatures
+        # Check for digital signatures (skip if encrypted)
         has_signatures = False
         signature_names = []
-        for page_num in range(page_count):
-            page = doc[page_num]
-            for widget in page.widgets():
-                if widget.field_type_string == "Signature":
-                    has_signatures = True
-                    signature_names.append(widget.field_name or f"sig_page{page_num + 1}")
-            # Also check for signature annotations
-            for annot in page.annots() or []:
-                if annot.type[0] == fitz.PDF_ANNOT_WIDGET:
-                    # Already checked via widgets
-                    pass
+        if not needs_pass:
+            for page_num in range(page_count):
+                page = doc[page_num]
+                for widget in page.widgets():
+                    if widget.field_type_string == "Signature":
+                        has_signatures = True
+                        signature_names.append(widget.field_name or f"sig_page{page_num + 1}")
+                # Also check for signature annotations
+                for annot in page.annots() or []:
+                    if annot.type[0] == fitz.PDF_ANNOT_WIDGET:
+                        # Already checked via widgets
+                        pass
 
-        # Additional check: look for signature in document catalog
-        try:
-            catalog = doc.pdf_catalog()
-            if catalog is not None:
-                acro_form = catalog.get("AcroForm")
-                if acro_form is not None:
-                    sig_fields = acro_form.get("Fields", [])
-                    for field_ref in sig_fields:
-                        field = doc.xref_object(field_ref)
-                        if "Sig" in field:
-                            has_signatures = True
-        except Exception:
-            pass
+            # Additional check: look for signature in document catalog
+            try:
+                catalog = doc.pdf_catalog()
+                if catalog is not None:
+                    acro_form = catalog.get("AcroForm")
+                    if acro_form is not None:
+                        sig_fields = acro_form.get("Fields", [])
+                        for field_ref in sig_fields:
+                            field = doc.xref_object(field_ref)
+                            if "Sig" in field:
+                                has_signatures = True
+            except Exception:
+                pass
 
         # Compute SHA-256 hash of source file
         sha256_hash = hashlib.sha256(pdf_bytes).hexdigest()
 
-        # Get metadata
-        metadata = doc.metadata
+        # Get metadata (may be None for encrypted PDFs)
+        metadata = doc.metadata or {}
         title = metadata.get("title", "") or ""
         author = metadata.get("author", "") or ""
         creator = metadata.get("creator", "") or ""
 
-        # Get page dimensions for first page
-        first_page = doc[0]
+        # Get page dimensions (skip if encrypted)
         page_info = []
-        for i in range(page_count):
-            p = doc[i]
-            page_info.append({
-                "page": i + 1,
-                "width_pt": round(p.rect.width, 2),
-                "height_pt": round(p.rect.height, 2),
-                "rotation_deg": p.rotation,
-            })
+        if not needs_pass:
+            for i in range(page_count):
+                p = doc[i]
+                page_info.append({
+                    "page": i + 1,
+                    "width_pt": round(p.rect.width, 2),
+                    "height_pt": round(p.rect.height, 2),
+                    "rotation_deg": p.rotation,
+                })
 
         return {
             "is_encrypted": is_encrypted,
