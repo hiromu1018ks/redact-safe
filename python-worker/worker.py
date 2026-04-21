@@ -26,6 +26,7 @@ from ocr_pipeline import (
     extract_text_digital_base64,
     run_text_extraction,
 )
+from bbox_normalizer import normalize_ocr_results
 
 
 def _open_pdf(params: dict):
@@ -186,7 +187,7 @@ def handle_ping(params: dict) -> dict:
 def handle_get_version(params: dict) -> dict:
     """Return worker version and available methods."""
     return {
-        "version": "0.5.0",
+        "version": "0.6.0",
         "methods": list(HANDLERS.keys()),
     }
 
@@ -294,6 +295,26 @@ def handle_rotate_bbox(params: dict) -> dict:
     return {"bbox": result}
 
 
+def handle_normalize_bboxes(params: dict) -> dict:
+    """Normalize OCR bounding boxes: convert to PDF points, merge lines, correct rotation."""
+    pdf_data_b64 = params.get("pdf_data", "")
+    page_num = params.get("page_num", 0)
+    regions = params.get("regions", [])
+    dpi = params.get("dpi", 300.0)
+    rotation_deg = params.get("rotation_deg", 0)
+    password = params.get("password", "")
+    merge_lines = params.get("merge_lines", True)
+
+    if not pdf_data_b64:
+        raise ValueError("pdf_data is required")
+    if not regions:
+        raise ValueError("regions is required")
+
+    return normalize_ocr_results(
+        pdf_data_b64, page_num, regions, dpi, rotation_deg, password, merge_lines
+    )
+
+
 # Method dispatch table
 HANDLERS = {
     "ping": handle_ping,
@@ -309,6 +330,7 @@ HANDLERS = {
     "run_layout_analysis": handle_run_layout_analysis,
     "extract_text_digital": handle_extract_text_digital,
     "run_text_extraction": handle_run_text_extraction,
+    "normalize_bboxes": handle_normalize_bboxes,
 }
 
 

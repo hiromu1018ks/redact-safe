@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 8 / 25
-**Current Task:** Task 8 - デジタルネイティブPDFのテキスト抽出経路 (完了)
+**Tasks Completed:** 9 / 25
+**Current Task:** Task 9 - bbox出力の正規化（座標変換・行統合・回転補正） (完了)
 
 ---
 
@@ -281,3 +281,42 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** Pythonがシステムにインストールされていないため、デジタルPDFのテストファイルでの実行時テストは未実施。Python環境導入後に動作確認が必要。
+
+### 2026-04-21 - Task 9: bbox出力の正規化（座標変換・行統合・回転補正）
+
+**変更内容:**
+- `python-worker/coord_utils.py` 更新 - `bbox_pixel_to_pdf_point`のバグ修正（戻り値が3要素 `[x_pt, y_pt, h_pt]` → 4要素 `[x_pt, y_pt, w_pt, h_pt]` に修正）
+- `python-worker/bbox_normalizer.py` 作成 - bbox正規化モジュール実装
+  - `normalize_bboxes()`: フル正規化パイプライン（ピクセル→PDF point変換 → 行統合 → 回転補正）
+  - `_convert_bboxes_to_pdf_points()`: 全リージョンのbbox_pxをbbox_pt（PDF point座標）に変換
+  - `_group_and_merge_lines()`: 垂直方向の近接性に基づいてbboxを行グループに分類し、各グループの最小外接矩形に統合
+  - `_is_same_line()`: 2つのbboxが同一行かどうかを判定（垂直オーバーラップまたは閾値内の近接性）
+  - `_merge_group()`: グループ内のbboxを1つのbboxにマージ（テキスト連結・信頼度平均化）
+  - `_apply_rotation()`: 全リージョンにページ回転補正（0°/90°/180°/270°）を適用
+  - `normalize_ocr_results()`: JSON-RPC用エントリポイント（base64 PDFデータ → ページ寸法自動取得 → 正規化実行）
+  - `line_merge_threshold`: bbox高さの50%を近接閾値として使用（カスタマイズ可能）
+- `python-worker/worker.py` 更新
+  - `bbox_normalizer`モジュールをインポート
+  - `handle_normalize_bboxes`: bbox正規化JSON-RPCハンドラ追加（pdf_data, page_num, regions, dpi, rotation_deg, password, merge_lines パラメータ）
+  - HANDLERSディスパッチテーブルに `normalize_bboxes` を追加
+  - バージョンを0.6.0に更新
+- `src-tauri/src/lib.rs` 更新 - Tauriコマンド追加
+  - `normalize_bboxes`: Pythonワーカー経由でbbox正規化実行（pdf_data_base64, page_num, regions, dpi, rotation_deg, password, merge_lines）
+  - invoke_handlerに新コマンドを登録
+  - `#[allow(clippy::too_many_arguments)]` アノテーション追加
+- `python-worker/tests/test_bbox_normalizer.py` 作成 - bbox正規化単体テスト（27テストケース）
+  - TestConvertBboxesToPdfPoints: 単一変換、空入力、bboxなし、異なるDPI
+  - TestIsSameLine: オーバーラップ、近接、遠隔、包含、異なる高さ
+  - TestGroupAndMergeLines: 同一行マージ、異行分離、単一、空入力、3つ同一行、複数行
+  - TestApplyRotation: 0°/90°/180°/270°回転、bboxなし
+  - TestNormalizeBboxes: フルパイプライン統合（マージあり/なし、回転あり、空入力）
+  - TestMergeGroup: 2リージョンマージ、テキスト/信頼度なし
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功 (dist/ にビルド出力)
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** Pythonがシステムにインストールされていないため、単体テストの実行時確認と回転付きテストPDFでの動作確認は未実施。Python環境導入後に実行必要。

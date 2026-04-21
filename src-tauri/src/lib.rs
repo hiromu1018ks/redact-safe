@@ -490,6 +490,40 @@ fn run_text_extraction(
     Ok(result)
 }
 
+// --- BBox Normalization Commands ---
+
+/// Normalize OCR bounding boxes: convert to PDF points, merge lines, correct rotation.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn normalize_bboxes(
+    state: State<WorkerState>,
+    pdf_data_base64: String,
+    page_num: u32,
+    regions: serde_json::Value,
+    dpi: Option<f64>,
+    rotation_deg: Option<u16>,
+    password: Option<String>,
+    merge_lines: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+        "page_num": page_num,
+        "regions": regions,
+        "dpi": dpi.unwrap_or(300.0),
+        "rotation_deg": rotation_deg.unwrap_or(0),
+        "password": password.unwrap_or_default(),
+        "merge_lines": merge_lines.unwrap_or(true),
+    });
+
+    let result = worker.call("normalize_bboxes", Some(params))?;
+    Ok(result)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -529,6 +563,7 @@ pub fn run() {
             run_layout_analysis,
             extract_text_digital,
             run_text_extraction,
+            normalize_bboxes,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

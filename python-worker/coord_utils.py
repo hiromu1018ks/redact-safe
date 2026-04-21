@@ -87,7 +87,7 @@ def bbox_pixel_to_pdf_point(
     x_pt, y_pt = pixel_to_pdf_point(x_px, y_px, dpi)
     w_pt = w_px * POINTS_PER_INCH / dpi
     h_pt = h_px * POINTS_PER_INCH / dpi
-    return [x_pt, y_pt, h_pt]
+    return [x_pt, y_pt, w_pt, h_pt]
 
 
 def rotate_bbox(

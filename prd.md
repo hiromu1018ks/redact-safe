@@ -285,7 +285,7 @@ Tauri Desktop App
       "bbox統合後の結果がJSON形式で正しく出力されることを確認",
       "回転付きテストPDFで回転補正が正しく動作することを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",
