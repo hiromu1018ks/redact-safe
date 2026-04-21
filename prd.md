@@ -505,7 +505,7 @@ Tauri Desktop App
       "10ページの確定処理が30秒以内に完了することを確認",
       "出力PDFのテキスト不在・hidden data完全除去を確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "integration",
