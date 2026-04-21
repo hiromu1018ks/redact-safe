@@ -1,5 +1,6 @@
 import { PdfViewer } from "./pdf-viewer.js";
 import { MaskingOverlay } from "./masking-overlay.js";
+import { UndoManager } from "./undo-manager.js";
 
 // --- Tauri API (safe access for browser fallback) ---
 const isTauri = !!window.__TAURI__;
@@ -135,6 +136,540 @@ btnCancelProgress.addEventListener("click", async () => {
 // --- PDF Viewer ---
 let pdfViewer = null;
 let maskingOverlay = null;
+let undoManager = new UndoManager();
+
+// ============================================================
+// Interaction Engine (drag / resize / draw-new)
+// ============================================================
+
+const InteractionMode = {
+  NONE: "none",
+  MOVE: "move",
+  RESIZE: "resize",
+  DRAW_NEW: "draw_new",
+};
+
+/** @type {{ mode: string, handleId: string|null, regionId: string|null, startClientX: number, startClientY: number, startBbox: number[]|null, currentBbox: number[]|null }} */
+let interaction = {
+  mode: InteractionMode.NONE,
+  handleId: null,
+  regionId: null,
+  startClientX: 0,
+  startClientY: 0,
+  startBbox: null,
+  currentBbox: null,
+};
+
+/** Minimum size in PDF points for a drawn region */
+const MIN_REGION_SIZE_PT = 5;
+
+/**
+ * Get the region object from local test regions or backend document.
+ * Returns null if not found.
+ */
+async function getRegion(pageNum, regionId) {
+  if (isTauri) {
+    try {
+      const doc = await invoke("get_document");
+      if (!doc || !doc.pages) return null;
+      const page = doc.pages.find((p) => p.page === pageNum);
+      if (!page || !page.regions) return null;
+      return page.regions.find((r) => r.id === regionId) || null;
+    } catch {
+      return null;
+    }
+  }
+  // Browser mode: check local testRegions
+  return testRegions.find((r) => r.id === regionId) || null;
+}
+
+/**
+ * Persist a region update to the backend (Tauri mode).
+ * In browser mode, updates local testRegions array.
+ */
+async function persistRegionUpdate(pageNum, regionId, updates) {
+  if (isTauri) {
+    try {
+      if (updates.bbox) {
+        await invoke("update_region_bbox", { pageNum, regionId, bbox: updates.bbox });
+      }
+      if (updates.enabled !== undefined) {
+        await invoke("toggle_region", { pageNum, regionId });
+      }
+    } catch (e) {
+      console.error("Failed to persist region update:", e);
+    }
+  } else {
+    const r = testRegions.find((tr) => tr.id === regionId);
+    if (r) {
+      if (updates.bbox) r.bbox = updates.bbox;
+      if (updates.enabled !== undefined) r.enabled = updates.enabled;
+    }
+  }
+}
+
+/**
+ * Add a region to backend (Tauri) or local test array (browser).
+ */
+async function persistAddRegion(pageNum, region) {
+  if (isTauri) {
+    try {
+      await invoke("add_region", { pageNum, region });
+    } catch (e) {
+      console.error("Failed to add region:", e);
+    }
+  } else {
+    testRegions.push(region);
+  }
+}
+
+/**
+ * Remove a region from backend (Tauri) or local test array (browser).
+ */
+async function persistRemoveRegion(pageNum, regionId) {
+  if (isTauri) {
+    try {
+      await invoke("remove_region", { pageNum, regionId });
+    } catch (e) {
+      console.error("Failed to remove region:", e);
+    }
+  } else {
+    const idx = testRegions.findIndex((r) => r.id === regionId);
+    if (idx !== -1) testRegions.splice(idx, 1);
+  }
+}
+
+/**
+ * Toggle region ON/OFF via backend.
+ * Returns the new enabled state.
+ */
+async function persistToggleRegion(pageNum, regionId) {
+  if (isTauri) {
+    try {
+      return await invoke("toggle_region", { pageNum, regionId });
+    } catch (e) {
+      console.error("Failed to toggle region:", e);
+      return null;
+    }
+  } else {
+    const r = testRegions.find((tr) => tr.id === regionId);
+    if (r) {
+      r.enabled = !r.enabled;
+      return r.enabled;
+    }
+    return null;
+  }
+}
+
+/**
+ * Refresh overlay regions from backend or local array.
+ */
+async function refreshOverlay() {
+  if (!maskingOverlay) return;
+  if (isTauri) {
+    await fetchAndDisplayRegions(pdfViewer.currentPage);
+  } else {
+    maskingOverlay.setRegions(testRegions);
+  }
+}
+
+/**
+ * Log an audit event (Tauri only).
+ */
+function logAuditEvent(event, documentId, data) {
+  if (!isTauri) return;
+  invoke("log_event", { event, user: null, documentId, data }).catch(() => {});
+}
+
+/**
+ * Auto-save document (Tauri only).
+ */
+async function autoSaveDocument() {
+  if (!isTauri) return;
+  try {
+    await invoke("save_document", { path: "" });
+  } catch {
+    // Auto-save is best-effort; document may not have a path yet
+  }
+}
+
+/**
+ * Handle mousedown on the overlay canvas — start interaction.
+ */
+function onOverlayMouseDown(e) {
+  if (!maskingOverlay || !pdfViewer.isLoaded) return;
+  if (e.button !== 0) return; // left click only
+
+  const clientX = e.clientX;
+  const clientY = e.clientY;
+
+  // 1. Check if clicking a resize handle of the selected region
+  const handleId = maskingOverlay.findHandleAtPoint(clientX, clientY);
+  if (handleId) {
+    const region = maskingOverlay.regions.find((r) => r.id === maskingOverlay.selectedRegionId);
+    if (region) {
+      interaction.mode = InteractionMode.RESIZE;
+      interaction.handleId = handleId;
+      interaction.regionId = region.id;
+      interaction.startClientX = clientX;
+      interaction.startClientY = clientY;
+      interaction.startBbox = [...region.bbox];
+      interaction.currentBbox = [...region.bbox];
+      e.preventDefault();
+      return;
+    }
+  }
+
+  // 2. Check if clicking on a region
+  const region = maskingOverlay.findRegionAtPoint(clientX, clientY);
+  if (region) {
+    maskingOverlay.setSelectedRegion(region.id);
+    interaction.mode = InteractionMode.MOVE;
+    interaction.handleId = null;
+    interaction.regionId = region.id;
+    interaction.startClientX = clientX;
+    interaction.startClientY = clientY;
+    interaction.startBbox = [...region.bbox];
+    interaction.currentBbox = [...region.bbox];
+    e.preventDefault();
+    return;
+  }
+
+  // 3. Clicked on empty space → deselect and start drawing new region
+  maskingOverlay.setSelectedRegion(null);
+  interaction.mode = InteractionMode.DRAW_NEW;
+  interaction.handleId = null;
+  interaction.regionId = null;
+  interaction.startClientX = clientX;
+  interaction.startClientY = clientY;
+  interaction.startBbox = null;
+  interaction.currentBbox = null;
+  e.preventDefault();
+}
+
+/**
+ * Handle mousemove during an active interaction.
+ */
+function onOverlayMouseMove(e) {
+  if (!maskingOverlay || !pdfViewer.isLoaded) return;
+
+  const clientX = e.clientX;
+  const clientY = e.clientY;
+
+  if (interaction.mode === InteractionMode.NONE) {
+    // Update cursor based on what's under the mouse
+    const handleId = maskingOverlay.findHandleAtPoint(clientX, clientY);
+    if (handleId) {
+      overlayCanvas.style.cursor = MaskingOverlay.cursorForHandle(handleId);
+    } else {
+      const region = maskingOverlay.findRegionAtPoint(clientX, clientY);
+      overlayCanvas.style.cursor = region ? "move" : "crosshair";
+    }
+    return;
+  }
+
+  e.preventDefault();
+
+  if (interaction.mode === InteractionMode.MOVE) {
+    // Calculate delta in PDF points
+    const startPt = pdfViewer.screenToPdfPoint(interaction.startClientX, interaction.startClientY);
+    const currentPt = pdfViewer.screenToPdfPoint(clientX, clientY);
+    const dx = currentPt.x - startPt.x;
+    const dy = currentPt.y - startPt.y;
+
+    const newBbox = [
+      interaction.startBbox[0] + dx,
+      interaction.startBbox[1] + dy,
+      interaction.startBbox[2],
+      interaction.startBbox[3],
+    ];
+    interaction.currentBbox = newBbox;
+
+    // Update region in overlay
+    const region = maskingOverlay.regions.find((r) => r.id === interaction.regionId);
+    if (region) {
+      region.bbox = newBbox;
+      maskingOverlay.render();
+    }
+  } else if (interaction.mode === InteractionMode.RESIZE) {
+    const startPt = pdfViewer.screenToPdfPoint(interaction.startClientX, interaction.startClientY);
+    const currentPt = pdfViewer.screenToPdfPoint(clientX, clientY);
+    const dx = currentPt.x - startPt.x;
+    const dy = currentPt.y - startPt.y;
+
+    const sb = interaction.startBbox;
+    let newX = sb[0], newY = sb[1], newW = sb[2], newH = sb[3];
+    const hid = interaction.handleId;
+
+    // Adjust x, y, w, h based on which handle is being dragged
+    if (hid === "nw" || hid === "w" || hid === "sw") { newX += dx; newW -= dx; }
+    if (hid === "ne" || hid === "e" || hid === "se") { newW += dx; }
+    if (hid === "nw" || hid === "n" || hid === "ne") { newY += dy; newH -= dy; }
+    if (hid === "sw" || hid === "s" || hid === "se") { newH += dy; }
+
+    // Enforce minimum size
+    if (newW < MIN_REGION_SIZE_PT) {
+      if (hid === "nw" || hid === "w" || hid === "sw") {
+        newX = sb[0] + sb[2] - MIN_REGION_SIZE_PT;
+      }
+      newW = MIN_REGION_SIZE_PT;
+    }
+    if (newH < MIN_REGION_SIZE_PT) {
+      if (hid === "nw" || hid === "n" || hid === "ne") {
+        newY = sb[1] + sb[3] - MIN_REGION_SIZE_PT;
+      }
+      newH = MIN_REGION_SIZE_PT;
+    }
+
+    const newBbox = [newX, newY, newW, newH];
+    interaction.currentBbox = newBbox;
+
+    const region = maskingOverlay.regions.find((r) => r.id === interaction.regionId);
+    if (region) {
+      region.bbox = newBbox;
+      maskingOverlay.render();
+    }
+  } else if (interaction.mode === InteractionMode.DRAW_NEW) {
+    // Draw a preview rectangle on the overlay
+    const startPt = pdfViewer.screenToPdfPoint(interaction.startClientX, interaction.startClientY);
+    const currentPt = pdfViewer.screenToPdfPoint(clientX, clientY);
+
+    const x = Math.min(startPt.x, currentPt.x);
+    const y = Math.min(startPt.y, currentPt.y);
+    const w = Math.abs(currentPt.x - startPt.x);
+    const h = Math.abs(currentPt.y - startPt.y);
+
+    interaction.currentBbox = [x, y, w, h];
+
+    // Render a preview by temporarily adding a "drawing" region
+    _drawNewRegionPreview(x, y, w, h);
+  }
+}
+
+/**
+ * Render a preview rectangle for the region being drawn.
+ */
+function _drawNewRegionPreview(x, y, w, h) {
+  if (!maskingOverlay) return;
+  const ctx = maskingOverlay.ctx;
+  // Re-render existing regions first
+  maskingOverlay.render();
+  if (w < 1 || h < 1) return;
+
+  const bbox = pdfViewer.getBBoxInCanvas([x, y, w, h]);
+  ctx.save();
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = "#44AA44";
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(bbox.x, bbox.y, bbox.width, bbox.height);
+  ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+  ctx.fillRect(bbox.x, bbox.y, bbox.width, bbox.height);
+  ctx.restore();
+}
+
+/**
+ * Handle mouseup — finalize the interaction.
+ */
+async function onOverlayMouseUp(e) {
+  if (interaction.mode === InteractionMode.NONE) return;
+
+  const pageNum = pdfViewer.currentPage;
+
+  if (interaction.mode === InteractionMode.MOVE) {
+    if (interaction.currentBbox && interaction.startBbox) {
+      const changed =
+        interaction.currentBbox[0] !== interaction.startBbox[0] ||
+        interaction.currentBbox[1] !== interaction.startBbox[1];
+      if (changed) {
+        // Push undo
+        undoManager.push({
+          type: "move",
+          pageNum,
+          regionId: interaction.regionId,
+          prevBbox: interaction.startBbox,
+        });
+        // Persist
+        await persistRegionUpdate(pageNum, interaction.regionId, {
+          bbox: interaction.currentBbox,
+        });
+        logAuditEvent("region_moved", null, {
+          region_id: interaction.regionId,
+          page: pageNum,
+          prev_bbox: interaction.startBbox,
+          new_bbox: interaction.currentBbox,
+        });
+        await autoSaveDocument();
+      }
+    }
+  } else if (interaction.mode === InteractionMode.RESIZE) {
+    if (interaction.currentBbox && interaction.startBbox) {
+      const changed =
+        interaction.currentBbox[0] !== interaction.startBbox[0] ||
+        interaction.currentBbox[1] !== interaction.startBbox[1] ||
+        interaction.currentBbox[2] !== interaction.startBbox[2] ||
+        interaction.currentBbox[3] !== interaction.startBbox[3];
+      if (changed) {
+        undoManager.push({
+          type: "resize",
+          pageNum,
+          regionId: interaction.regionId,
+          prevBbox: interaction.startBbox,
+        });
+        await persistRegionUpdate(pageNum, interaction.regionId, {
+          bbox: interaction.currentBbox,
+        });
+        logAuditEvent("region_resized", null, {
+          region_id: interaction.regionId,
+          page: pageNum,
+          prev_bbox: interaction.startBbox,
+          new_bbox: interaction.currentBbox,
+        });
+        await autoSaveDocument();
+      }
+    }
+  } else if (interaction.mode === InteractionMode.DRAW_NEW) {
+    if (interaction.currentBbox) {
+      const [x, y, w, h] = interaction.currentBbox;
+      if (w >= MIN_REGION_SIZE_PT && h >= MIN_REGION_SIZE_PT) {
+        const newRegion = {
+          id: generateId(),
+          bbox: [x, y, w, h],
+          type: "custom",
+          confidence: 1.0,
+          enabled: true,
+          source: "manual",
+          note: "",
+        };
+        undoManager.push({
+          type: "add",
+          pageNum,
+          regionId: newRegion.id,
+          snapshot: { ...newRegion },
+        });
+        await persistAddRegion(pageNum, newRegion);
+        maskingOverlay.setSelectedRegion(newRegion.id);
+        logAuditEvent("region_added", null, {
+          region_id: newRegion.id,
+          page: pageNum,
+          bbox: newRegion.bbox,
+          source: "manual",
+        });
+        await autoSaveDocument();
+      }
+    }
+    // Clear preview and refresh
+    await refreshOverlay();
+  }
+
+  // Reset interaction
+  interaction.mode = InteractionMode.NONE;
+  interaction.handleId = null;
+  interaction.regionId = null;
+  interaction.startBbox = null;
+  interaction.currentBbox = null;
+}
+
+/**
+ * Perform undo of the last operation.
+ */
+async function performUndo() {
+  const op = undoManager.pop();
+  if (!op) return;
+
+  const pageNum = op.pageNum;
+
+  if (op.type === "move" || op.type === "resize") {
+    // Restore previous bbox
+    await persistRegionUpdate(pageNum, op.regionId, { bbox: op.prevBbox });
+    maskingOverlay.setSelectedRegion(op.regionId);
+    logAuditEvent("undo_" + op.type, null, {
+      region_id: op.regionId,
+      page: pageNum,
+      restored_bbox: op.prevBbox,
+    });
+  } else if (op.type === "add") {
+    // Remove the added region
+    await persistRemoveRegion(pageNum, op.regionId);
+    logAuditEvent("undo_add", null, {
+      region_id: op.regionId,
+      page: pageNum,
+    });
+  } else if (op.type === "remove") {
+    // Re-add the removed region
+    await persistAddRegion(pageNum, op.snapshot);
+    maskingOverlay.setSelectedRegion(op.regionId);
+    logAuditEvent("undo_remove", null, {
+      region_id: op.regionId,
+      page: pageNum,
+    });
+  } else if (op.type === "toggle") {
+    // Toggle back
+    await persistToggleRegion(pageNum, op.regionId);
+    maskingOverlay.setSelectedRegion(op.regionId);
+    logAuditEvent("undo_toggle", null, {
+      region_id: op.regionId,
+      page: pageNum,
+    });
+  }
+
+  await refreshOverlay();
+  await autoSaveDocument();
+}
+
+/**
+ * Delete the currently selected region.
+ */
+async function deleteSelectedRegion() {
+  if (!maskingOverlay || !maskingOverlay.selectedRegionId) return;
+
+  const regionId = maskingOverlay.selectedRegionId;
+  const pageNum = pdfViewer.currentPage;
+
+  // Get region snapshot for undo
+  const region = await getRegion(pageNum, regionId);
+  if (!region) return;
+
+  undoManager.push({
+    type: "remove",
+    pageNum,
+    regionId,
+    snapshot: { ...region },
+  });
+
+  await persistRemoveRegion(pageNum, regionId);
+  maskingOverlay.setSelectedRegion(null);
+  logAuditEvent("region_deleted", null, {
+    region_id: regionId,
+    page: pageNum,
+  });
+  await refreshOverlay();
+  await autoSaveDocument();
+}
+
+/**
+ * Toggle the currently selected region ON/OFF.
+ */
+async function toggleSelectedRegion() {
+  if (!maskingOverlay || !maskingOverlay.selectedRegionId) return;
+
+  const regionId = maskingOverlay.selectedRegionId;
+  const pageNum = pdfViewer.currentPage;
+
+  undoManager.push({
+    type: "toggle",
+    pageNum,
+    regionId,
+  });
+
+  const newEnabled = await persistToggleRegion(pageNum, regionId);
+  logAuditEvent("region_toggled", null, {
+    region_id: regionId,
+    page: pageNum,
+    enabled: newEnabled,
+  });
+  await refreshOverlay();
+  await autoSaveDocument();
+}
 
 // --- DOM Elements ---
 const pdfCanvas = document.getElementById("pdf-canvas");
@@ -629,12 +1164,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const pt = pdfViewer.screenToPdfPoint(e.clientX, e.clientY);
     coordDisplay.textContent = `${pt.x.toFixed(1)}, ${pt.y.toFixed(1)} pt`;
 
-    // Hover highlight
-    if (maskingOverlay) {
+    // Hover highlight (only when not in an interaction)
+    if (maskingOverlay && interaction.mode === InteractionMode.NONE) {
       const region = maskingOverlay.findRegionAtPoint(e.clientX, e.clientY);
       const regionId = region ? region.id : null;
       maskingOverlay.setHoveredRegion(regionId);
-      overlayCanvas.style.cursor = region ? "pointer" : "default";
     }
   });
 
@@ -642,18 +1176,24 @@ document.addEventListener("DOMContentLoaded", () => {
     coordDisplay.textContent = "";
     if (maskingOverlay) {
       maskingOverlay.setHoveredRegion(null);
-      overlayCanvas.style.cursor = "default";
+      if (interaction.mode === InteractionMode.NONE) {
+        overlayCanvas.style.cursor = "crosshair";
+      }
     }
   });
 
-  // Click on overlay to select a region
-  overlayCanvas.addEventListener("click", (e) => {
+  // --- Interaction Engine: mousedown / mousemove / mouseup ---
+  overlayCanvas.addEventListener("mousedown", onOverlayMouseDown);
+  window.addEventListener("mousemove", onOverlayMouseMove);
+  window.addEventListener("mouseup", onOverlayMouseUp);
+
+  // Double-click to toggle ON/OFF
+  overlayCanvas.addEventListener("dblclick", (e) => {
     if (!maskingOverlay) return;
     const region = maskingOverlay.findRegionAtPoint(e.clientX, e.clientY);
     if (region) {
       maskingOverlay.setSelectedRegion(region.id);
-    } else {
-      maskingOverlay.setSelectedRegion(null);
+      toggleSelectedRegion();
     }
   });
 
@@ -706,6 +1246,13 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    // Ctrl+Z: Undo
+    if (e.ctrlKey && !e.shiftKey && e.key === "z") {
+      e.preventDefault();
+      performUndo();
+      return;
+    }
+
     // Ctrl+Shift+D: Toggle debug panel
     if (e.ctrlKey && e.shiftKey && e.key === "D") {
       e.preventDefault();
@@ -714,6 +1261,20 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (!pdfViewer.isLoaded) return;
+
+    // Delete / Backspace: Delete selected region
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      deleteSelectedRegion();
+      return;
+    }
+
+    // Space: Toggle selected region ON/OFF
+    if (e.key === " " && !e.ctrlKey && !e.shiftKey) {
+      e.preventDefault();
+      toggleSelectedRegion();
+      return;
+    }
 
     // Left/Right arrows: Page navigation
     if (e.key === "ArrowLeft") {
@@ -987,6 +1548,9 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const count = await invoke("set_all_regions_enabled", { pageNum: null, enabled: true });
       docResult.textContent = `${count} regions enabled`;
+      await refreshOverlay();
+      logAuditEvent("all_regions_enabled", null, { count });
+      await autoSaveDocument();
     } catch (e) {
       docResult.textContent = "Error: " + e;
     }
@@ -996,6 +1560,9 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const count = await invoke("set_all_regions_enabled", { pageNum: null, enabled: false });
       docResult.textContent = `${count} regions disabled`;
+      await refreshOverlay();
+      logAuditEvent("all_regions_disabled", null, { count });
+      await autoSaveDocument();
     } catch (e) {
       docResult.textContent = "Error: " + e;
     }
@@ -1139,18 +1706,20 @@ document.addEventListener("DOMContentLoaded", () => {
     overlayResult.textContent = "Overlay cleared";
   });
 
-  btnToggleTestOn.addEventListener("click", () => {
+  btnToggleTestOn.addEventListener("click", async () => {
     if (!maskingOverlay) return;
     testRegions.forEach((r) => (r.enabled = true));
     maskingOverlay.setRegions(testRegions);
     overlayResult.textContent = "All regions ON";
+    logAuditEvent("all_regions_enabled", null, { count: testRegions.length });
   });
 
-  btnToggleTestOff.addEventListener("click", () => {
+  btnToggleTestOff.addEventListener("click", async () => {
     if (!maskingOverlay) return;
     testRegions.forEach((r) => (r.enabled = false));
     maskingOverlay.setRegions(testRegions);
     overlayResult.textContent = "All regions OFF";
+    logAuditEvent("all_regions_disabled", null, { count: testRegions.length });
   });
 
   btnSelectNext.addEventListener("click", () => {

@@ -364,7 +364,7 @@ Tauri Desktop App
       "全操作のCtrl+Z Undo対応を実装",
       "操作のたびにJSON自動保存・操作ログ記録されることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",

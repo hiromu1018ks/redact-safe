@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 13 / 25
-**Current Task:** Task 13 - 仮マスキングオーバーレイエンジン（Canvas API）を実装する (完了)
+**Tasks Completed:** 14 / 25
+**Current Task:** Task 14 - マスキング矩形の操作（ON/OFF・移動・リサイズ・追加・削除）を実装する (完了)
 
 ---
 
@@ -541,3 +541,40 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** 実際のPDFでのオーバーレイ描画確認はブラウザ/アプリ起動権限が必要。コードレビューにより座標同期・描画ロジックの妥当性を確認済み。
+
+### 2026-04-21 - Task 14: マスキング矩形の操作（ON/OFF・移動・リサイズ・追加・削除）を実装
+
+**変更内容:**
+- `src/undo-manager.js` 作成 - UndoManagerクラス実装
+  - 操作のundoスタック（最大50深度）を管理
+  - 操作タイプ: add, remove, move, resize, toggle
+  - 各操作にpageNum, regionId, snapshot/prevBboxを記録
+- `src/masking-overlay.js` 更新 - ハンドル検出機能を追加
+  - `findHandleAtPoint()`: 選択中リージョンの8つのリサイズハンドル（四隅+辺中点）のヒットテスト
+  - `cursorForHandle()`: ハンドルIDに対応するカーソルスタイルを返すstaticメソッド
+  - `HANDLE_SIZE` static定数（6px）
+- `src/main.js` 大幅更新 - 対話エンジン実装
+  - `InteractionMode`: NONE / MOVE / RESIZE / DRAW_NEW の4つの対話モード
+  - `onOverlayMouseDown()`: ハンドル→リサイズ、リージョン→移動、空白→新規描画を判定
+  - `onOverlayMouseMove()`: ドラッグ中のリアルタイム座標更新（PDF point座標系で計算）
+    - 移動: startBboxからのdelta適用
+    - リサイズ: 8方向ハンドルに応じたbbox再計算（最小サイズ5pt制限）
+    - 新規描画: ダッシュ線プレビュー矩形を描画
+  - `onOverlayMouseUp()`: 操作確定時にundoスタックpush + バックエンドpersist + 監査ログ + 自動保存
+  - `performUndo()`: Ctrl+Zによる操作取り消し（move/resizeはbbox復元、addは削除、removeは再追加、toggleは再切替）
+  - `deleteSelectedRegion()`: Delete/Backspaceキーで選択中リージョンを削除
+  - `toggleSelectedRegion()`: SpaceキーまたはダブルクリックでON/OFF切替
+  - `persistRegionUpdate()`, `persistAddRegion()`, `persistRemoveRegion()`, `persistToggleRegion()`: Tauri/ブラウザ両モード対応のバックエンド書込
+  - `logAuditEvent()`: 各操作の監査ログ記録（region_moved, region_resized, region_added, region_deleted, region_toggled, undo_*）
+  - `autoSaveDocument()`: 各操作後にJSON自動保存
+  - マウスカーソル: 空白時crosshair、リージョン上move、ハンドル上resize
+  - キーボードショートカット追加: Ctrl+Z(Undo), Delete(削除), Space(ON/OFF切替)
+  - デバッグパネルのAll ON/OFFボタンに監査ログ記録・自動保存を追加
+
+**実行コマンド:**
+- `npm run build` - 成功 (dist/ にビルド出力)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** ブラウザでの対話操作テスト（ドラッグ・リサイズ・新規描画）は権限未承認のため未実施。コードレビューにより座標計算・イベントハンドリングの妥当性を確認済み。

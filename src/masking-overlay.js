@@ -85,6 +85,68 @@ export class MaskingOverlay {
   }
 
   /**
+   * Handle identifiers for the 8 resize handles of a selected region.
+   * Corners: nw, ne, sw, se. Edge midpoints: n, e, s, w.
+   */
+  static HANDLE_SIZE = 6;
+
+  /**
+   * Find which resize handle is at the given client position, if any.
+   * Only checks handles of the currently selected region.
+   * @param {number} clientX
+   * @param {number} clientY
+   * @returns {string|null} Handle id ("nw","n","ne","e","se","s","sw","w") or null
+   */
+  findHandleAtPoint(clientX, clientY) {
+    if (!this.selectedRegionId) return null;
+    const region = this.regions.find((r) => r.id === this.selectedRegionId);
+    if (!region) return null;
+
+    const bbox = this.pdfViewer.getBBoxInCanvas(region.bbox);
+    if (!bbox || bbox.width <= 0 || bbox.height <= 0) return null;
+
+    const rect = this.canvas.getBoundingClientRect();
+    const canvasX = (clientX - rect.left) * (this.canvas.width / rect.width);
+    const canvasY = (clientY - rect.top) * (this.canvas.height / rect.height);
+
+    const hs = MaskingOverlay.HANDLE_SIZE;
+    const threshold = hs + 3; // slightly larger hit area
+
+    const handles = {
+      nw: [bbox.x, bbox.y],
+      n:  [bbox.x + bbox.width / 2, bbox.y],
+      ne: [bbox.x + bbox.width, bbox.y],
+      e:  [bbox.x + bbox.width, bbox.y + bbox.height / 2],
+      se: [bbox.x + bbox.width, bbox.y + bbox.height],
+      s:  [bbox.x + bbox.width / 2, bbox.y + bbox.height],
+      sw: [bbox.x, bbox.y + bbox.height],
+      w:  [bbox.x, bbox.y + bbox.height / 2],
+    };
+
+    for (const [id, [hx, hy]] of Object.entries(handles)) {
+      if (Math.abs(canvasX - hx) <= threshold && Math.abs(canvasY - hy) <= threshold) {
+        return id;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Get the CSS cursor style for a given handle id.
+   * @param {string|null} handleId
+   * @returns {string}
+   */
+  static cursorForHandle(handleId) {
+    const cursors = {
+      nw: "nwse-resize", se: "nwse-resize",
+      ne: "nesw-resize", sw: "nesw-resize",
+      n: "ns-resize", s: "ns-resize",
+      e: "ew-resize", w: "ew-resize",
+    };
+    return cursors[handleId] || "default";
+  }
+
+  /**
    * Find the region at a given screen/client position.
    * @param {number} clientX
    * @param {number} clientY
