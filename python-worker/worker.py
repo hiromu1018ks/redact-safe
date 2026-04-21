@@ -27,6 +27,7 @@ from ocr_pipeline import (
     run_text_extraction,
 )
 from bbox_normalizer import normalize_ocr_results
+from pii_detector import detect_pii, detect_pii_base64, load_rules
 
 
 def _open_pdf(params: dict):
@@ -187,7 +188,7 @@ def handle_ping(params: dict) -> dict:
 def handle_get_version(params: dict) -> dict:
     """Return worker version and available methods."""
     return {
-        "version": "0.6.0",
+        "version": "0.7.0",
         "methods": list(HANDLERS.keys()),
     }
 
@@ -315,6 +316,57 @@ def handle_normalize_bboxes(params: dict) -> dict:
     )
 
 
+def handle_detect_pii(params: dict) -> dict:
+    """Detect PII in text regions using regex-based rules."""
+    text_regions = params.get("text_regions", [])
+    enabled_types = params.get("enabled_types", None)
+    rules_path = params.get("rules_path", None)
+
+    if not text_regions:
+        raise ValueError("text_regions is required")
+
+    detections = detect_pii(
+        text_regions,
+        rules_path=rules_path,
+        enabled_types=enabled_types,
+    )
+    return {
+        "detections": detections,
+        "region_count": len(text_regions),
+        "detection_count": len(detections),
+    }
+
+
+def handle_detect_pii_pdf(params: dict) -> dict:
+    """Detect PII from a PDF page (combines text extraction + detection)."""
+    pdf_data_b64 = params.get("pdf_data", "")
+    page_num = params.get("page_num", 0)
+    enabled_types = params.get("enabled_types", None)
+    rules_path = params.get("rules_path", None)
+    password = params.get("password", "")
+
+    if not pdf_data_b64:
+        raise ValueError("pdf_data is required")
+
+    return detect_pii_base64(
+        pdf_data_b64,
+        page_num,
+        rules_path=rules_path,
+        enabled_types=enabled_types,
+        password=password,
+    )
+
+
+def handle_load_detection_rules(params: dict) -> dict:
+    """Load detection rules from YAML file."""
+    rules_path = params.get("rules_path", None)
+    rules = load_rules(rules_path)
+    return {
+        "rules": rules,
+        "rule_count": len(rules),
+    }
+
+
 # Method dispatch table
 HANDLERS = {
     "ping": handle_ping,
@@ -331,6 +383,9 @@ HANDLERS = {
     "extract_text_digital": handle_extract_text_digital,
     "run_text_extraction": handle_run_text_extraction,
     "normalize_bboxes": handle_normalize_bboxes,
+    "detect_pii": handle_detect_pii,
+    "detect_pii_pdf": handle_detect_pii_pdf,
+    "load_detection_rules": handle_load_detection_rules,
 }
 
 

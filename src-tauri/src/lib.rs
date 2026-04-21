@@ -524,6 +524,78 @@ fn normalize_bboxes(
     Ok(result)
 }
 
+// --- PII Detection Commands ---
+
+/// Detect PII in text regions using regex-based rules via Python worker.
+#[tauri::command]
+fn detect_pii(
+    state: State<WorkerState>,
+    text_regions: serde_json::Value,
+    enabled_types: Option<Vec<String>>,
+    rules_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "text_regions": text_regions,
+        "enabled_types": enabled_types,
+        "rules_path": rules_path,
+    });
+
+    let result = worker.call("detect_pii", Some(params))?;
+    Ok(result)
+}
+
+/// Detect PII from a PDF page (combines text extraction + detection) via Python worker.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+fn detect_pii_pdf(
+    state: State<WorkerState>,
+    pdf_data_base64: String,
+    page_num: u32,
+    enabled_types: Option<Vec<String>>,
+    rules_path: Option<String>,
+    password: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "pdf_data": pdf_data_base64,
+        "page_num": page_num,
+        "enabled_types": enabled_types,
+        "rules_path": rules_path,
+        "password": password.unwrap_or_default(),
+    });
+
+    let result = worker.call("detect_pii_pdf", Some(params))?;
+    Ok(result)
+}
+
+/// Load detection rules from YAML file via Python worker.
+#[tauri::command]
+fn load_detection_rules(
+    state: State<WorkerState>,
+    rules_path: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+
+    let params = serde_json::json!({
+        "rules_path": rules_path,
+    });
+
+    let result = worker.call("load_detection_rules", Some(params))?;
+    Ok(result)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -564,6 +636,9 @@ pub fn run() {
             extract_text_digital,
             run_text_extraction,
             normalize_bboxes,
+            detect_pii,
+            detect_pii_pdf,
+            load_detection_rules,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

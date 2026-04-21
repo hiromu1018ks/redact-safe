@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 9 / 25
-**Current Task:** Task 9 - bbox出力の正規化（座標変換・行統合・回転補正） (完了)
+**Tasks Completed:** 10 / 25
+**Current Task:** Task 10 - 正規表現によるPII自動検出エンジン (完了)
 
 ---
 
@@ -320,3 +320,55 @@
 **スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
 
 **課題:** Pythonがシステムにインストールされていないため、単体テストの実行時確認と回転付きテストPDFでの動作確認は未実施。Python環境導入後に実行必要。
+
+### 2026-04-21 - Task 10: 正規表現によるPII自動検出エンジンを実装
+
+**変更内容:**
+- `python-worker/detection_rules.yaml` 作成 - デフォルトPII検出ルールをYAML形式で定義
+  - 住所検出: 47都道府県名 + 番地パターン（漢数字対応）
+  - 電話番号検出: 市外局番パターン（ハイフンあり/なし、0X-XXX-XXXX等）
+  - マイナンバー検出: 12桁数字（lookbehind/lookaheadで前後数字除外）
+  - メールアドレス検出: RFC準拠パターン
+  - 生年月日検出: 西暦（YYYY年MM月DD日, YYYY/MM/DD, YYYY-MM-DD）+ 和暦（令和/平成/昭和/大正/明治 + 元年対応）
+  - 法人番号検出: 13桁数字（lookbehind/lookaheadで前後数字除外）
+- `python-worker/pii_detector.py` 作成 - PII検出エンジンモジュール実装
+  - `load_rules()`: YAMLファイルから検出ルール読込
+  - `load_rules_from_string()`: YAML文字列から検出ルール読込
+  - `_compile_rules()`: ルールの正規表現コンパイル（無効パターンのスキップ対応）
+  - `detect_pii()`: テキストリージョン群に対するPII検出（bbox, confidence連鎖, type フィルタリング対応）
+  - `detect_pii_text()`: 単一テキスト文字列のPII検出（テスト用ユーティリティ）
+  - `detect_pii_base64()`: PDFページからのPII検出（テキスト抽出 + 検出の統合エントリポイント）
+  - 各検出結果に id(UUID), text, bbox_pt, type, confidence, source, rule_id, rule_name, start, end, original_region_id を付与
+- `python-worker/worker.py` 更新
+  - `handle_detect_pii`: テキストリージョンに対するPII検出JSON-RPCハンドラ
+  - `handle_detect_pii_pdf`: PDFページからのPII検出JSON-RPCハンドラ（テキスト抽出統合）
+  - `handle_load_detection_rules`: 検出ルール読込JSON-RPCハンドラ
+  - HANDLERSディスパッチテーブルに `detect_pii`, `detect_pii_pdf`, `load_detection_rules` を追加
+  - バージョンを0.7.0に更新
+- `src-tauri/src/lib.rs` 更新 - Tauriコマンド追加
+  - `detect_pii`: Pythonワーカー経由でPII検出（text_regions, enabled_types, rules_path）
+  - `detect_pii_pdf`: Pythonワーカー経由でPDFページPII検出（pdf_data_base64, page_num, enabled_types, rules_path, password）
+  - `load_detection_rules`: Pythonワーカー経由で検出ルール読込
+  - invoke_handlerに新コマンドを登録
+- `python-worker/tests/test_pii_detector.py` 作成 - PII検出エンジン単体テスト（53テストケース）
+  - TestLoadRules: デフォルトルール読込, 必須フィールド確認, 文字列読込, 空文字列, ルール数確認
+  - TestAddressDetection: フルアドレス, 大阪, 北海道, 漢数字, 番地接尾辞, 都道府県のみ不可, 複数住所, 区有り
+  - TestPhoneDetection: ハイフンあり, 携帯, ハイフンなし, マイナンバーとの非混同, フリーダイヤル
+  - TestMyNumberDetection: 12桁, 11桁不可, 13桁不可(法人番号), 文中埋込, 先頭ゼロ
+  - TestEmailDetection: 基本, ドット付, プラス付, サブドメイン, @マーク誤検出なし
+  - TestBirthDateDetection: 西暦年月日, スラッシュ区切り, ハイフン区切り, 令和, 平成, 昭和, 元年, 桁数, スペース
+  - TestCorporateNumberDetection: 13桁, 12桁不可, 14桁不可, 文中埋込
+  - TestDetectPiiWithRegions: bbox保持, region_id保持, confidence連鎖, 空リージョン, テキストなし, 複数検出
+  - TestEnabledTypesFilter: 型フィルタリング, 空リスト, None=全件
+  - TestDetectionResultStructure: 必須フィールド, source=auto, confidence範囲, UUID形式
+  - TestMixedPiiDetection: 個人情報ブロック, 法人文書
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功
+- `npm run tauri dev` - アプリ起動成功 (localhost:1420)
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** Pythonがシステムにインストールされていないため、単体テストの実行時確認は未実施。Python環境導入後に実行必要。

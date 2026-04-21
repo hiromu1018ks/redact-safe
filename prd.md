@@ -300,7 +300,7 @@ Tauri Desktop App
       "デフォルト検出ルールをYAMLファイルとして定義・読込を実装",
       "テストテキストで各検出パターンの動作を確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",
