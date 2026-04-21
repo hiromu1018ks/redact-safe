@@ -14,6 +14,9 @@ struct AuditState(Mutex<AuditLogger>);
 
 struct DocumentState(Mutex<Option<MaskingDocument>>);
 
+/// Tracks the auto-save file path for the current document.
+struct AutoSavePathState(Mutex<Option<String>>);
+
 #[tauri::command]
 fn worker_ping(
     state: State<WorkerState>,
@@ -177,6 +180,7 @@ fn get_os_username() -> String {
 #[tauri::command]
 fn create_document(
     state: State<DocumentState>,
+    auto_save_state: State<AutoSavePathState>,
     source_file: String,
     source_hash: String,
     os_username: Option<String>,
@@ -187,8 +191,17 @@ fn create_document(
     });
     let doc = MaskingDocument::new(&source_file, &source_hash, operator);
     let doc_id = doc.document_id.clone();
+
+    // Set auto-save path based on document ID
+    let auto_save_path = document_state::get_auto_save_path(&doc_id)?;
+
     let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     *guard = Some(doc);
+
+    // Set the auto-save path
+    let mut path_guard = auto_save_state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *path_guard = Some(auto_save_path.to_string_lossy().to_string());
+
     Ok(doc_id)
 }
 
@@ -493,14 +506,96 @@ fn save_document(state: State<DocumentState>, path: String) -> Result<(), String
     doc.save_to_file(std::path::Path::new(&path))
 }
 
-/// Load document from a JSON file.
+/// Auto-save the current document to its tracked auto-save path.
+/// Creates a backup before saving, uses atomic write for crash safety.
 #[tauri::command]
-fn load_document(state: State<DocumentState>, path: String) -> Result<serde_json::Value, String> {
+fn auto_save_document(
+    state: State<DocumentState>,
+    auto_save_state: State<AutoSavePathState>,
+) -> Result<bool, String> {
+    let save_path = {
+        let path_guard = auto_save_state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+        path_guard.clone()
+    };
+
+    let save_path = match save_path {
+        Some(p) if !p.is_empty() => p,
+        _ => return Ok(false), // No auto-save path set yet
+    };
+
+    let path = std::path::Path::new(&save_path);
+
+    // Create backup before saving (maintains 3 generations)
+    if path.exists() {
+        let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+        if let Some(doc) = guard.as_ref() {
+            MaskingDocument::create_backup(path)?;
+            doc.save_to_file(path)?;
+            return Ok(true);
+        }
+    }
+
+    // First auto-save: just write the file (no backup needed yet)
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    if let Some(doc) = guard.as_ref() {
+        doc.save_to_file(path)?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+/// Set the auto-save file path for the current document.
+#[tauri::command]
+fn set_auto_save_path(
+    auto_save_state: State<AutoSavePathState>,
+    path: String,
+) -> Result<(), String> {
+    let mut guard = auto_save_state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *guard = if path.is_empty() { None } else { Some(path) };
+    Ok(())
+}
+
+/// Get the current auto-save file path.
+#[tauri::command]
+fn get_auto_save_path(auto_save_state: State<AutoSavePathState>) -> Result<Option<String>, String> {
+    let guard = auto_save_state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    Ok(guard.clone())
+}
+
+/// Generate an auto-save file path based on the document ID.
+#[tauri::command]
+fn generate_auto_save_path(state: State<DocumentState>) -> Result<String, String> {
+    let guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    let doc = guard.as_ref().ok_or("No document loaded")?;
+    let path = document_state::get_auto_save_path(&doc.document_id)?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+/// Check if a document file can be recovered (is corrupt but has backup).
+#[tauri::command]
+fn can_recover_document(path: String) -> Result<bool, String> {
+    Ok(MaskingDocument::can_recover(std::path::Path::new(&path)))
+}
+
+/// List available backups for a document file.
+#[tauri::command]
+fn list_backups(path: String) -> Result<Vec<document_state::BackupInfo>, String> {
+    Ok(MaskingDocument::list_backups(std::path::Path::new(&path)))
+}
+
+/// Load document from a JSON file with crash recovery support.
+/// If the file is corrupt, attempts to recover from the latest backup.
+#[tauri::command]
+fn load_document(state: State<DocumentState>, auto_save_state: State<AutoSavePathState>, path: String) -> Result<serde_json::Value, String> {
     let doc = MaskingDocument::load_from_file(std::path::Path::new(&path))?;
     let json = serde_json::to_value(&doc)
         .map_err(|e| format!("Failed to serialize document: {}", e))?;
     let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
     *guard = Some(doc);
+    // Set auto-save path to the loaded file's location
+    let mut path_guard = auto_save_state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+    *path_guard = Some(path);
     Ok(json)
 }
 
@@ -1037,6 +1132,7 @@ pub fn run() {
             AuditLogger::new().expect("Failed to initialize audit logger"),
         )))
         .manage(DocumentState(Mutex::new(None)))
+        .manage(AutoSavePathState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             init_worker,
             shutdown_worker,
@@ -1065,6 +1161,12 @@ pub fn run() {
             get_document_summary_safe,
             save_document,
             load_document,
+            auto_save_document,
+            set_auto_save_path,
+            get_auto_save_path,
+            generate_auto_save_path,
+            can_recover_document,
+            list_backups,
             get_document_summary,
             analyze_pdf,
             decrypt_pdf,

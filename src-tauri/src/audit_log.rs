@@ -99,6 +99,8 @@ impl AuditLogger {
     }
 
     /// Log an audit event.
+    /// Filters PII text from the data field to prevent personal information
+    /// from being stored in audit logs. Only structural metadata (region_id, bbox, type, etc.) is retained.
     pub fn log_event(
         &self,
         event: &str,
@@ -107,6 +109,9 @@ impl AuditLogger {
         data: Option<serde_json::Value>,
     ) -> Result<AuditRecord, String> {
         let now = Local::now();
+
+        // Filter PII text from data field
+        let data = data.map(|d| filter_pii_from_data(&d));
         let today = now.date_naive();
 
         // Check if we need to rotate (new day)
@@ -329,4 +334,41 @@ pub fn parse_date(date_str: &str) -> Result<NaiveDate, String> {
 /// Get the current OS username.
 pub fn get_current_user() -> String {
     std::env::var("USERNAME").unwrap_or_else(|_| "unknown".to_string())
+}
+
+/// Fields that may contain PII text and should be stripped from audit log data.
+const PII_TEXT_FIELDS: &[&str] = &[
+    "text",
+    "original_text",
+    "matched_text",
+    "content",
+    "value",
+    "excerpt",
+    "preview",
+    "description",
+    "detail_text",
+    "name_text",
+];
+
+/// Filter potential PII text fields from audit log data.
+/// Retains structural metadata (region_id, bbox, type, page, etc.) but removes
+/// fields that could contain actual personal information text.
+fn filter_pii_from_data(data: &serde_json::Value) -> serde_json::Value {
+    match data {
+        serde_json::Value::Object(map) => {
+            let filtered: serde_json::Map<String, serde_json::Value> = map
+                .iter()
+                .filter(|(key, _)| {
+                    let key_lower = key.to_lowercase();
+                    !PII_TEXT_FIELDS.iter().any(|f| key_lower == *f)
+                })
+                .map(|(k, v)| (k.clone(), filter_pii_from_data(v)))
+                .collect();
+            serde_json::Value::Object(filtered)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(filter_pii_from_data).collect())
+        }
+        other => other.clone(),
+    }
 }

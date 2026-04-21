@@ -16,7 +16,9 @@ import json
 import hashlib
 import base64
 import io
+import os
 import traceback
+import tempfile
 
 
 # ============================================================
@@ -38,6 +40,73 @@ def send_progress(request_id: int, phase: str, current: int, total: int, message
     }
     sys.stderr.write(json.dumps(notification, ensure_ascii=False) + "\n")
     sys.stderr.flush()
+
+
+# ============================================================
+# Secure File Deletion
+# ============================================================
+
+# Track temp files for cleanup on worker shutdown
+_managed_temp_files = []
+
+
+def secure_delete_file(filepath):
+    """Securely delete a file by overwriting with zeros/random data before unlinking.
+
+    This prevents data recovery from disk sectors that held the file contents.
+    """
+    try:
+        file_size = os.path.getsize(filepath)
+        if file_size == 0:
+            os.unlink(filepath)
+            return
+
+        # Pass 1: Overwrite with zeros
+        with open(filepath, "wb") as f:
+            f.write(b"\x00" * file_size)
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Pass 2: Overwrite with random data
+        with open(filepath, "wb") as f:
+            f.write(os.urandom(min(file_size, 1024 * 1024)))  # Up to 1MB of random data
+            f.flush()
+            os.fsync(f.fileno())
+
+        # Pass 3: Overwrite with zeros again
+        with open(filepath, "wb") as f:
+            f.write(b"\x00" * file_size)
+            f.flush()
+            os.fsync(f.fileno())
+
+        os.unlink(filepath)
+    except OSError:
+        # If secure deletion fails, at least try normal deletion
+        try:
+            os.unlink(filepath)
+        except OSError:
+            pass
+
+
+def create_managed_temp_file(suffix=""):
+    """Create a managed temp file that will be securely deleted on worker shutdown.
+
+    Returns:
+        Tuple of (file_descriptor, file_path)
+    """
+    fd, path = tempfile.mkstemp(suffix=suffix)
+    _managed_temp_files.append(path)
+    return fd, path
+
+
+def cleanup_temp_files():
+    """Securely delete all managed temp files (called on worker shutdown)."""
+    for path in _managed_temp_files[:]:
+        secure_delete_file(path)
+        if path in _managed_temp_files:
+            _managed_temp_files.remove(path)
+
+
 from coord_utils import (
     pdf_point_to_pixel,
     pixel_to_pdf_point,
@@ -651,7 +720,7 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
         import os
 
         # Save to temp file first (needed for encryption/permissions)
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pdf")
+        tmp_fd, tmp_path = create_managed_temp_file(suffix=".pdf")
         os.close(tmp_fd)
         try:
             # Set copy-prevention permissions via encryption
@@ -675,10 +744,9 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
             with open(tmp_path, "rb") as f:
                 out_bytes = f.read()
         finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            secure_delete_file(tmp_path)
+            if tmp_path in _managed_temp_files:
+                _managed_temp_files.remove(tmp_path)
 
         # Step 6: Verify the output PDF is safe
         send_progress(request_id, "verifying", total_pages, total_pages, "安全PDFを検証中...")
@@ -821,11 +889,15 @@ def main():
     sys.stderr.write("RedactSafe Python Worker started\n")
     sys.stderr.flush()
 
-    for line in sys.stdin:
-        line = line.strip()
-        if not line:
-            continue
-        process_message(line)
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            process_message(line)
+    finally:
+        # Clean up all managed temp files on shutdown
+        cleanup_temp_files()
 
 
 if __name__ == "__main__":

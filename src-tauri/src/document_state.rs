@@ -1,7 +1,8 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 const SCHEMA_VERSION: &str = "1.3";
 
@@ -455,24 +456,185 @@ impl MaskingDocument {
             .map_err(|e| format!("Failed to parse document JSON: {}", e))
     }
 
-    /// Save document to a JSON file.
+    /// Save document to a JSON file using atomic write (write to temp, then rename).
+    /// This prevents corruption if the process crashes during write.
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create directory: {}", e))?;
         }
         let content = self.to_json()?;
-        fs::write(path, content)
-            .map_err(|e| format!("Failed to write document file: {}", e))?;
+
+        // Atomic write: write to temp file in the same directory, then rename
+        let temp_path = path.with_extension("tmp");
+        {
+            let mut file = fs::File::create(&temp_path)
+                .map_err(|e| format!("Failed to create temp file: {}", e))?;
+            file.write_all(content.as_bytes())
+                .map_err(|e| format!("Failed to write temp file: {}", e))?;
+            file.sync_all()
+                .map_err(|e| format!("Failed to sync temp file: {}", e))?;
+        }
+
+        // Atomic rename (on Windows, requires the target to not exist for rename,
+        // so we remove the old file first if it exists)
+        if path.exists() {
+            fs::remove_file(path)
+                .map_err(|e| format!("Failed to remove old file: {}", e))?;
+        }
+        fs::rename(&temp_path, path)
+            .map_err(|e| {
+                // Clean up temp file if rename fails
+                let _ = fs::remove_file(&temp_path);
+                format!("Failed to rename temp file: {}", e)
+            })?;
+
         Ok(())
     }
 
-    /// Load document from a JSON file.
+    /// Load document from a JSON file with crash recovery.
+    /// If the file is corrupt or empty, attempts to load from the latest backup.
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read document file: {}", e))?;
-        Self::from_json(&content)
+
+        // Check for empty file (corrupt from crash during write)
+        if content.trim().is_empty() {
+            // Try to recover from backup
+            if let Some(backup) = find_latest_backup(path) {
+                return Self::load_from_file(&backup).map_err(|_| {
+                    "Document file is empty and backup recovery failed".to_string()
+                });
+            }
+            return Err("Document file is empty (possibly corrupted from crash)".to_string());
+        }
+
+        match Self::from_json(&content) {
+            Ok(doc) => Ok(doc),
+            Err(e) => {
+                // Try to recover from backup
+                if let Some(backup) = find_latest_backup(path) {
+                    match Self::load_from_file(&backup) {
+                        Ok(doc) => Ok(doc),
+                        Err(_) => Err(format!(
+                            "Failed to parse document: {}. Backup recovery also failed.", e
+                        )),
+                    }
+                } else {
+                    Err(format!("Failed to parse document: {}. No backup available.", e))
+                }
+            }
+        }
     }
+
+    /// Create a backup of the current file before saving.
+    /// Maintains up to 3 generations of backups.
+    pub fn create_backup(path: &Path) -> Result<(), String> {
+        if !path.exists() {
+            return Ok(()); // No file to backup
+        }
+
+        // Rotate existing backups: .bak3 → delete, .bak2 → .bak3, .bak1 → .bak2
+        let bak3 = PathBuf::from(format!("{}.bak3", path.display()));
+        let bak2 = PathBuf::from(format!("{}.bak2", path.display()));
+        let bak1 = PathBuf::from(format!("{}.bak1", path.display()));
+
+        if bak3.exists() {
+            let _ = fs::remove_file(&bak3);
+        }
+        if bak2.exists() {
+            let _ = fs::rename(&bak2, &bak3);
+        }
+        if bak1.exists() {
+            let _ = fs::rename(&bak1, &bak2);
+        }
+
+        // Copy current file to .bak1
+        fs::copy(path, &bak1)
+            .map_err(|e| format!("Failed to create backup: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Check if a document file exists and is potentially recoverable.
+    pub fn can_recover(path: &Path) -> bool {
+        if !path.exists() {
+            return false;
+        }
+        // Check if file is empty or corrupt
+        match fs::read_to_string(path) {
+            Ok(content) if content.trim().is_empty() => {
+                // Empty file — check if backup exists
+                find_latest_backup(path).is_some()
+            }
+            Ok(content) => {
+                // File has content — check if it's valid JSON
+                serde_json::from_str::<MaskingDocument>(&content).is_err()
+                    && find_latest_backup(path).is_some()
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// List available backups for a document file.
+    pub fn list_backups(path: &Path) -> Vec<BackupInfo> {
+        let mut backups = Vec::new();
+        for i in 1..=3 {
+            let bak_path = PathBuf::from(format!("{}.bak{}", path.display(), i));
+            if bak_path.exists() {
+                if let Ok(metadata) = fs::metadata(&bak_path) {
+                    if let Ok(modified) = metadata.modified() {
+                        backups.push(BackupInfo {
+                            path: bak_path,
+                            generation: i,
+                            modified: modified
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0),
+                            size_bytes: metadata.len(),
+                        });
+                    }
+                }
+            }
+        }
+        backups.sort_by_key(|b| std::cmp::Reverse(b.generation)); // Most recent first
+        backups
+    }
+}
+
+/// Information about a backup file.
+#[derive(Debug, serde::Serialize)]
+pub struct BackupInfo {
+    pub path: PathBuf,
+    pub generation: u32,
+    pub modified: u64, // Unix timestamp
+    pub size_bytes: u64,
+}
+
+/// Find the latest (most recent generation) backup file for a given document path.
+fn find_latest_backup(path: &Path) -> Option<PathBuf> {
+    for i in 1..=3 {
+        let bak_path = PathBuf::from(format!("{}.bak{}", path.display(), i));
+        if bak_path.exists() {
+            return Some(bak_path);
+        }
+    }
+    None
+}
+
+/// Get the default auto-save directory for RedactSafe documents.
+pub fn get_auto_save_dir() -> Result<PathBuf, String> {
+    let app_data = dirs::data_dir().ok_or("Failed to determine APPDATA directory")?;
+    let save_dir = app_data.join("RedactSafe").join("documents");
+    fs::create_dir_all(&save_dir)
+        .map_err(|e| format!("Failed to create auto-save directory: {}", e))?;
+    Ok(save_dir)
+}
+
+/// Generate an auto-save file path for a document ID.
+pub fn get_auto_save_path(document_id: &str) -> Result<PathBuf, String> {
+    let save_dir = get_auto_save_dir()?;
+    Ok(save_dir.join(format!("{}.json", document_id)))
 }
 
 #[cfg(test)]
@@ -717,5 +879,125 @@ mod tests {
         assert!(region.enabled);
         assert_eq!(region.source, RegionSource::Manual);
         assert!(region.note.is_empty());
+    }
+
+    #[test]
+    fn test_atomic_save_and_load() {
+        let dir = std::env::temp_dir().join("redact_safe_test_atomic");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("test_atomic.json");
+
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
+        doc.add_page(1, 595.28, 841.89, 0, "ocr");
+        doc.add_region(1, Region::new_auto("r1".into(), [10.0, 20.0, 50.0, 30.0], RegionType::Name, 0.9))
+            .unwrap();
+
+        // Save using atomic write
+        doc.save_to_file(&path).unwrap();
+        assert!(path.exists());
+
+        // No temp file should remain
+        let tmp_path = path.with_extension("tmp");
+        assert!(!tmp_path.exists());
+
+        // Load back
+        let loaded = MaskingDocument::load_from_file(&path).unwrap();
+        assert_eq!(loaded.document_id, doc.document_id);
+        assert_eq!(loaded.total_regions_count(), 1);
+        assert_eq!(loaded.pages[0].regions[0].bbox, [10.0, 20.0, 50.0, 30.0]);
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_backup_rotation() {
+        let dir = std::env::temp_dir().join("redact_safe_test_backup");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("test_backup.json");
+
+        let doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
+
+        // Save initial version
+        doc.save_to_file(&path).unwrap();
+
+        // Create backup 1
+        MaskingDocument::create_backup(&path).unwrap();
+        assert!(path.with_extension("json.bak1").exists());
+
+        // Create backup 2 (rotates bak1 → bak2)
+        MaskingDocument::create_backup(&path).unwrap();
+        assert!(path.with_extension("json.bak1").exists());
+        assert!(path.with_extension("json.bak2").exists());
+
+        // Create backup 3 (rotates bak2 → bak3, bak1 → bak2)
+        MaskingDocument::create_backup(&path).unwrap();
+        assert!(path.with_extension("json.bak1").exists());
+        assert!(path.with_extension("json.bak2").exists());
+        assert!(path.with_extension("json.bak3").exists());
+
+        // Create backup 4 (bak3 should be deleted, bak2 → bak3, bak1 → bak2)
+        MaskingDocument::create_backup(&path).unwrap();
+        assert!(path.with_extension("json.bak1").exists());
+        assert!(path.with_extension("json.bak2").exists());
+        assert!(path.with_extension("json.bak3").exists());
+
+        // Only 3 backups should exist
+        let backups = MaskingDocument::list_backups(&path);
+        assert_eq!(backups.len(), 3);
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_crash_recovery_from_backup() {
+        let dir = std::env::temp_dir().join("redact_safe_test_recovery");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("test_recovery.json");
+
+        let mut doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
+        doc.add_page(1, 595.28, 841.89, 0, "ocr");
+
+        // Save valid version and create backup
+        doc.save_to_file(&path).unwrap();
+        MaskingDocument::create_backup(&path).unwrap();
+
+        // Corrupt the main file (empty content simulating crash during write)
+        fs::write(&path, "").unwrap();
+
+        // can_recover should detect the issue
+        assert!(MaskingDocument::can_recover(&path));
+
+        // load_from_file should recover from backup
+        let recovered = MaskingDocument::load_from_file(&path).unwrap();
+        assert_eq!(recovered.document_id, doc.document_id);
+        assert_eq!(recovered.pages.len(), 1);
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_crash_recovery_invalid_json() {
+        let dir = std::env::temp_dir().join("redact_safe_test_invalid_json");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("test_invalid.json");
+
+        let doc = MaskingDocument::new("test.pdf", "sha256:abc123", None);
+
+        // Save valid version and create backup
+        doc.save_to_file(&path).unwrap();
+        MaskingDocument::create_backup(&path).unwrap();
+
+        // Corrupt the main file with invalid JSON
+        fs::write(&path, "{invalid json content").unwrap();
+
+        // load_from_file should recover from backup
+        let recovered = MaskingDocument::load_from_file(&path).unwrap();
+        assert_eq!(recovered.document_id, doc.document_id);
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&dir);
     }
 }
