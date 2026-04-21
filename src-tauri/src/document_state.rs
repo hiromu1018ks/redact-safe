@@ -82,15 +82,22 @@ impl RegionSource {
 
 /// Type of detected PII / sensitive information.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
 pub enum RegionType {
+    #[serde(rename = "name")]
     Name,
+    #[serde(rename = "address")]
     Address,
+    #[serde(rename = "phone")]
     Phone,
+    #[serde(rename = "email")]
     Email,
+    #[serde(rename = "birth_date")]
     BirthDate,
+    #[serde(rename = "my_number")]
     MyNumber,
+    #[serde(rename = "corporate_number")]
     CorporateNumber,
+    #[serde(rename = "custom")]
     Custom(String),
 }
 
@@ -101,9 +108,9 @@ impl RegionType {
             RegionType::Address => std::borrow::Cow::Borrowed("address"),
             RegionType::Phone => std::borrow::Cow::Borrowed("phone"),
             RegionType::Email => std::borrow::Cow::Borrowed("email"),
-            RegionType::BirthDate => std::borrow::Cow::Borrowed("birthDate"),
-            RegionType::MyNumber => std::borrow::Cow::Borrowed("myNumber"),
-            RegionType::CorporateNumber => std::borrow::Cow::Borrowed("corporateNumber"),
+            RegionType::BirthDate => std::borrow::Cow::Borrowed("birth_date"),
+            RegionType::MyNumber => std::borrow::Cow::Borrowed("my_number"),
+            RegionType::CorporateNumber => std::borrow::Cow::Borrowed("corporate_number"),
             RegionType::Custom(s) => std::borrow::Cow::Owned(format!("custom:{}", s)),
         }
     }

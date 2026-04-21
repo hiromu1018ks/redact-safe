@@ -490,7 +490,7 @@ Tauri Desktop App
       "座標精度が±2pt以内であることを確認",
       "ログに全イベントが正しく記録されていることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "integration",

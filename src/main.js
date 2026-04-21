@@ -11,9 +11,9 @@ const PII_TYPE_LABELS = {
   address: "住所",
   phone: "電話番号",
   email: "メールアドレス",
-  birthDate: "生年月日",
-  myNumber: "マイナンバー",
-  corporateNumber: "法人番号",
+  birth_date: "生年月日",
+  my_number: "マイナンバー",
+  corporate_number: "法人番号",
   custom: "カスタム",
 };
 
@@ -1633,6 +1633,14 @@ async function analyzePdfWithWorker(pdfData) {
     return null;
   }
   try {
+    // Ensure Python worker is initialized
+    try {
+      await invoke("init_worker");
+    } catch {
+      console.warn("Python worker initialization failed, continuing without analysis");
+      return null;
+    }
+
     progressManager.show();
     progressManager.update({ phase: "analyzing", current: 0, total: 1, message: "PDFを解析中..." });
     const base64 = arrayBufferToBase64(pdfData);
@@ -1740,6 +1748,98 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
   } catch (e) {
     console.error("Failed to load PDF:", e);
     alert("PDFの読み込みに失敗しました: " + e.message);
+    return;
+  }
+
+  // Step 6: Run PII detection pipeline (Tauri only)
+  if (isTauri && analysis && analysis.page_count > 0) {
+    await runPiiDetection(arrayBuffer, analysis.page_count, currentPdfPassword);
+  }
+}
+
+/**
+ * Run PII detection on all pages of the loaded PDF.
+ * Extracts text, detects PII, and registers detected regions in the document state.
+ */
+async function runPiiDetection(arrayBuffer, pageCount, password) {
+  const base64 = arrayBufferToBase64(arrayBuffer);
+  let totalDetections = 0;
+
+  try {
+    progressManager.show();
+    progressManager.update({
+      phase: "pii_detection",
+      current: 0,
+      total: pageCount,
+      message: "個人情報を検出中... (0/" + pageCount + "ページ)",
+    });
+
+    for (let pageIdx = 0; pageIdx < pageCount; pageIdx++) {
+      try {
+        progressManager.update({
+          phase: "pii_detection",
+          current: pageIdx + 1,
+          total: pageCount,
+          message: "個人情報を検出中... (" + (pageIdx + 1) + "/" + pageCount + "ページ)",
+        });
+
+        const result = await invoke("detect_pii_pdf", {
+          pdfDataBase64: base64,
+          pageNum: pageIdx,
+          enableNameDetection: true,
+          password: password || null,
+        });
+
+        const detections = result.detections || [];
+        totalDetections += detections.length;
+
+        // Register each detection as a region in the document state
+        for (const det of detections) {
+          try {
+            await invoke("add_region", {
+              pageNum: pageIdx + 1, // 1-indexed for document state
+              region: {
+                id: det.id || generateId(),
+                bbox: det.bbox_pt || [0, 0, 0, 0],
+                type: det.type || "custom",
+                confidence: det.confidence || 0.5,
+                enabled: true,
+                source: "auto",
+                note: det.rule_name || "",
+              },
+            });
+          } catch (regionErr) {
+            console.warn("Failed to add region:", det, regionErr);
+          }
+        }
+      } catch (pageErr) {
+        console.warn("PII detection failed for page", pageIdx + 1, ":", pageErr);
+      }
+    }
+
+    // Update sidebar and overlay with detected regions
+    updateSidebarRegions();
+    if (pdfViewer.isLoaded) {
+      fetchAndDisplayRegions(pdfViewer.currentPage);
+    }
+
+    // Log detection event
+    if (isTauri) {
+      invoke("get_document").then((doc) => {
+        if (doc) {
+          logAuditEvent("pii_detection_completed", doc.document_id, {
+            total_pages: pageCount,
+            total_detections: totalDetections,
+          });
+        }
+      }).catch(() => {});
+    }
+
+    console.log("PII detection complete:", totalDetections, "regions detected across", pageCount, "pages");
+  } catch (e) {
+    console.warn("PII detection pipeline failed:", e);
+  } finally {
+    progressManager.hide();
   }
 }
 

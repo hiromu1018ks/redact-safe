@@ -366,9 +366,9 @@ main {
 .region-item .region-type.type-address { color: #2e7d32; }
 .region-item .region-type.type-phone { color: #6a1b9a; }
 .region-item .region-type.type-email { color: #c62828; }
-.region-item .region-type.type-birthDate { color: #e65100; }
-.region-item .region-type.type-myNumber { color: #ad1457; }
-.region-item .region-type.type-corporateNumber { color: #00695c; }
+.region-item .region-type.type-birth_date { color: #e65100; }
+.region-item .region-type.type-my_number { color: #ad1457; }
+.region-item .region-type.type-corporate_number { color: #00695c; }
 .region-item .region-type.type-custom { color: #555; }
 
 /* Empty region list message */

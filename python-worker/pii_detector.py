@@ -537,7 +537,7 @@ def detect_pii_base64(
         extraction_result = run_text_extraction(
             pdf_data_b64, page_num, 300, password, progress_callback=progress_callback
         )
-        text_regions = extraction_result.get("regions", [])
+        text_regions = extraction_result.get("text_regions", [])
 
     if progress_callback:
         progress_callback("pii_detecting", 1, 2, "個人情報を検出中...")

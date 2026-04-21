@@ -420,7 +420,7 @@ def extract_text_digital(
 ) -> Dict[str, Any]:
     """Extract text and bounding boxes from a digital PDF using PyMuPDF.
 
-    Uses page.get_text("rawdict") to get character-level quads,
+    Uses page.get_text("dict") to get text with spans,
     then groups them into text regions (lines) with bounding boxes.
 
     Confidence is fixed at 1.0 for digital text extraction path.
@@ -434,7 +434,7 @@ def extract_text_digital(
     page_width_pt = round(rect.width, 2)
     page_height_pt = round(rect.height, 2)
 
-    text_dict = page.get_text("rawdict")
+    text_dict = page.get_text("dict")
     blocks = text_dict.get("blocks", [])
 
     text_regions = []
