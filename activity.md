@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-21
-**Tasks Completed:** 4 / 25
-**Current Task:** Task 4 - JSONベースの状態管理システムと座標系ユーティリティ (完了)
+**Tasks Completed:** 5 / 25
+**Current Task:** Task 5 - PDF.jsによるPDFビューアーとマルチページナビゲーション (完了)
 
 ---
 
@@ -128,3 +128,46 @@
 - `npm run tauri dev` - 成功 (localhost:1420 で起動確認)
 
 **課題:** Pythonがシステムにインストールされていないため、Python単体テストは未実施。Python環境導入後に実行必要。ブラウザ動作確認は権限未承認のためビルド成功で代替。
+
+### 2026-04-21 - Task 5: PDF.jsによるPDFビューアーとマルチページナビゲーション
+
+**変更内容:**
+- `src/pdf-viewer.js` 作成 - PDF.jsベースのPDFビューアーモジュール実装
+  - `PdfViewer` クラス: PDF読込 (ArrayBuffer/URL対応)、Canvas レンダリング、ページナビゲーション
+  - ズーム機能: zoomIn/zoomOut/setZoom (0.25x〜5.0x)、fitToWidth
+  - 座標系変換: screenToPdfPoint / pdfPointToScreen / getBBoxInCanvas (PDF point ↔ viewport pixel)
+  - ページ情報取得: getPageInfo、非同期レンダリングの重複防止 (pendingPage pattern)
+  - コールバック: onPageChange, onZoomChange, onLoad
+- `index.html` 更新 - UIレイアウト再構築
+  - PDFツールバー追加: [PDFを開く] [ズーム(−/+/幅に合わせ)] [ページ(«/入力/»)] [座標表示]
+  - テストパネルをDebug Panelに移動 (Ctrl+Shift+Dでトグル表示、オーバーレイ形式)
+  - ドラッグ&ドロップ対応のPDFコンテナ (canvas + placeholder)
+  - フッターツールバーのボタンID重複解消 (btn-all-on → btn-toolbar-all-on)
+- `src/styles.css` 更新 - PDFビューアーUIスタイル追加
+  - PDFツールバー: flexレイアウト、グループ区切り
+  - PDFコンテナ: スクロール可能、中央配置、has-pdf時は左上寄せ
+  - Canvas: ボックスシャドウ、表示/非表示制御
+  - Debugオーバーレイ: セミトランスペアレント背景、モーダル風パネル
+  - 座標表示: monospace、右寄せ
+- `src/main.js` 更新 - PDFビューアー統合
+  - Tauri環境とブラウザ環境の両方で動作するファイルオープン実装
+    - Tauri: `@tauri-apps/plugin-dialog` + `convertFileSrc` でファイル読込
+    - ブラウザ: HTML file input フォールバック
+  - ドラッグ&ドロップによるPDF読込対応
+  - キーボードショートカット: Ctrl+O(開く), ←/→(ページ切替), Ctrl+/−(ズーム), Ctrl+0(100%), Ctrl+Shift+D(Debug)
+  - マウス移動時のPDF point座標リアルタイム表示
+  - ページ入力フィールド (Enterでジャンプ)
+- `src-tauri/Cargo.toml` 更新 - `tauri-plugin-dialog = "2"` 追加
+- `src-tauri/capabilities/default.json` 更新 - `"dialog:default"` 権限追加
+- `src-tauri/src/lib.rs` 更新 - `tauri_plugin_dialog::init()` プラグイン登録
+- npm: `pdfjs-dist`, `@tauri-apps/plugin-dialog` 追加
+
+**実行コマンド:**
+- `npm install pdfjs-dist @tauri-apps/plugin-dialog` - 成功
+- `cargo check` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `cargo clippy` (src-tauri/) - 成功 (dead_code warnings のみ、既存分)
+- `npm run build` - 成功 (dist/ にビルド出力、pdf.worker.min.mjs 含む)
+
+**スクリーンショット:** ブラウザ権限未承認のため未取得 (ビルド成功で代替確認)
+
+**課題:** ブラウザ動作確認は権限未承認のため未実施。10ページテストPDFでの動作確認は手動テストが必要。

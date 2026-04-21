@@ -1,22 +1,345 @@
-const { invoke } = window.__TAURI__.core;
+import { PdfViewer } from "./pdf-viewer.js";
+
+// --- Tauri API (safe access for browser fallback) ---
+const isTauri = !!window.__TAURI__;
+
+function invoke(cmd, args) {
+  if (!isTauri) return Promise.reject(new Error("Not running in Tauri"));
+  return window.__TAURI__.core.invoke(cmd, args);
+}
 
 // Generate a simple UUID-like ID
 function generateId() {
   return "r-" + Math.random().toString(36).substring(2, 10);
 }
 
+// --- PDF Viewer ---
+let pdfViewer = null;
+
+// --- DOM Elements ---
+const pdfCanvas = document.getElementById("pdf-canvas");
+const pdfPlaceholder = document.getElementById("pdf-placeholder");
+const pdfContainer = document.getElementById("pdf-container");
+const pdfFilename = document.getElementById("pdf-filename");
+const zoomLevel = document.getElementById("zoom-level");
+const pageInput = document.getElementById("page-input");
+const totalPagesSpan = document.getElementById("total-pages");
+const coordDisplay = document.getElementById("coord-display");
+const statusDisplay = document.getElementById("status-display");
+
+const btnOpenPdf = document.getElementById("btn-open-pdf");
+const btnZoomIn = document.getElementById("btn-zoom-in");
+const btnZoomOut = document.getElementById("btn-zoom-out");
+const btnFitWidth = document.getElementById("btn-fit-width");
+const btnPrevPage = document.getElementById("btn-prev-page");
+const btnNextPage = document.getElementById("btn-next-page");
+
+// --- Debug Panel ---
+const debugPanel = document.getElementById("debug-panel");
+const btnCloseDebug = document.getElementById("btn-close-debug");
+
+// ============================================================
+// PDF Viewer Setup
+// ============================================================
+
+function initPdfViewer() {
+  pdfViewer = new PdfViewer(pdfCanvas);
+
+  pdfViewer.onLoad = ({ numPages, fileName }) => {
+    // Show canvas, hide placeholder
+    pdfCanvas.classList.add("visible");
+    pdfPlaceholder.classList.add("hidden");
+    pdfContainer.classList.add("has-pdf");
+
+    // Update filename
+    pdfFilename.textContent = fileName;
+    pdfFilename.title = fileName;
+
+    // Update total pages
+    totalPagesSpan.textContent = numPages;
+    pageInput.max = numPages;
+    pageInput.value = 1;
+    pageInput.disabled = false;
+
+    // Enable navigation buttons
+    btnPrevPage.disabled = false;
+    btnNextPage.disabled = numPages <= 1;
+    btnZoomIn.disabled = false;
+    btnZoomOut.disabled = false;
+    btnFitWidth.disabled = false;
+
+    // Update status
+    updateStatus(fileName, 1, numPages);
+
+    // Log file_opened event (Tauri only)
+    if (isTauri) {
+      invoke("log_event", {
+        event: "file_opened",
+        user: null,
+        documentId: null,
+        data: { file_name: fileName, num_pages: numPages },
+      }).catch(() => {});
+    }
+
+    // Auto fit to width
+    requestAnimationFrame(() => {
+      const containerWidth = pdfContainer.clientWidth - 32; // padding
+      if (containerWidth > 0) {
+        pdfViewer.fitToWidth(containerWidth);
+      }
+    });
+  };
+
+  pdfViewer.onPageChange = (pageNum, totalPages) => {
+    pageInput.value = pageNum;
+    btnPrevPage.disabled = pageNum <= 1;
+    btnNextPage.disabled = pageNum >= totalPages;
+    updateStatus(pdfViewer.fileName, pageNum, totalPages);
+  };
+
+  pdfViewer.onZoomChange = (scale) => {
+    zoomLevel.textContent = Math.round(scale * 100) + "%";
+  };
+}
+
+function updateStatus(fileName, pageNum, totalPages) {
+  if (!fileName) {
+    statusDisplay.textContent = "未読込";
+    return;
+  }
+  statusDisplay.textContent = `${fileName} — ${pageNum} / ${totalPages}ページ`;
+}
+
+function enablePdfControls(enabled) {
+  btnZoomIn.disabled = !enabled;
+  btnZoomOut.disabled = !enabled;
+  btnFitWidth.disabled = !enabled;
+  btnPrevPage.disabled = !enabled;
+  btnNextPage.disabled = !enabled;
+  pageInput.disabled = !enabled;
+}
+
+// ============================================================
+// File Opening
+// ============================================================
+
+async function openPdfFile() {
+  let result = null;
+
+  if (isTauri) {
+    try {
+      // Dynamic import to avoid build errors in browser-only mode
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const filePath = await open({
+        multiple: false,
+        filters: [{ name: "PDF Files", extensions: ["pdf"] }],
+      });
+      if (!filePath) return;
+
+      const url = window.__TAURI__.core.convertFileSrc(filePath);
+      const response = await fetch(url);
+      const arrayBuffer = await response.arrayBuffer();
+      const fileName = filePath.split(/[/\\]/).pop() || "document.pdf";
+      result = { data: arrayBuffer, fileName };
+    } catch (e) {
+      console.error("Failed to open file via Tauri dialog:", e);
+      return;
+    }
+  } else {
+    // Browser fallback: HTML file input
+    result = await new Promise((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".pdf";
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) {
+          resolve(null);
+          return;
+        }
+        const arrayBuffer = await file.arrayBuffer();
+        resolve({ data: arrayBuffer, fileName: file.name });
+      };
+      input.click();
+    });
+  }
+
+  if (!result) return;
+
+  try {
+    await pdfViewer.loadPdf(result.data, result.fileName);
+  } catch (e) {
+    console.error("Failed to load PDF:", e);
+    alert("PDFの読み込みに失敗しました: " + e.message);
+  }
+}
+
+// ============================================================
+// Event Listeners
+// ============================================================
+
 document.addEventListener("DOMContentLoaded", () => {
   console.log("RedactSafe initialized");
+  initPdfViewer();
+
+  // --- PDF Viewer Events ---
+
+  btnOpenPdf.addEventListener("click", openPdfFile);
+
+  btnZoomIn.addEventListener("click", () => {
+    pdfViewer.zoomIn();
+  });
+
+  btnZoomOut.addEventListener("click", () => {
+    pdfViewer.zoomOut();
+  });
+
+  btnFitWidth.addEventListener("click", () => {
+    const containerWidth = pdfContainer.clientWidth - 32;
+    if (containerWidth > 0) {
+      pdfViewer.fitToWidth(containerWidth);
+    }
+  });
+
+  btnPrevPage.addEventListener("click", () => {
+    pdfViewer.prevPage();
+  });
+
+  btnNextPage.addEventListener("click", () => {
+    pdfViewer.nextPage();
+  });
+
+  pageInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      const page = parseInt(pageInput.value, 10);
+      if (page) {
+        pdfViewer.goToPage(page);
+        pageInput.blur();
+      }
+    }
+  });
+
+  pageInput.addEventListener("change", () => {
+    const page = parseInt(pageInput.value, 10);
+    if (page) {
+      pdfViewer.goToPage(page);
+    }
+  });
+
+  // Coordinate display on mouse move
+  pdfCanvas.addEventListener("mousemove", (e) => {
+    if (!pdfViewer.isLoaded) return;
+    const pt = pdfViewer.screenToPdfPoint(e.clientX, e.clientY);
+    coordDisplay.textContent = `${pt.x.toFixed(1)}, ${pt.y.toFixed(1)} pt`;
+  });
+
+  pdfCanvas.addEventListener("mouseleave", () => {
+    coordDisplay.textContent = "";
+  });
+
+  // --- Drag & Drop Support ---
+  pdfContainer.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    pdfContainer.style.outline = "3px dashed #4a90d9";
+  });
+
+  pdfContainer.addEventListener("dragleave", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    pdfContainer.style.outline = "";
+  });
+
+  pdfContainer.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    pdfContainer.style.outline = "";
+
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+
+    if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+      alert("PDFファイルのみ読み込み可能です");
+      return;
+    }
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      await pdfViewer.loadPdf(arrayBuffer, file.name);
+    } catch (err) {
+      console.error("Failed to load dropped PDF:", err);
+      alert("PDFの読み込みに失敗しました: " + err.message);
+    }
+  });
+
+  // --- Keyboard Shortcuts ---
+  document.addEventListener("keydown", (e) => {
+    // Don't capture when typing in inputs
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") {
+      return;
+    }
+
+    // Ctrl+O: Open file
+    if (e.ctrlKey && e.key === "o") {
+      e.preventDefault();
+      openPdfFile();
+      return;
+    }
+
+    // Ctrl+Shift+D: Toggle debug panel
+    if (e.ctrlKey && e.shiftKey && e.key === "D") {
+      e.preventDefault();
+      toggleDebugPanel();
+      return;
+    }
+
+    if (!pdfViewer.isLoaded) return;
+
+    // Left/Right arrows: Page navigation
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      pdfViewer.prevPage();
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      pdfViewer.nextPage();
+    }
+
+    // Ctrl+/Ctrl-: Zoom
+    if (e.ctrlKey && (e.key === "=" || e.key === "+")) {
+      e.preventDefault();
+      pdfViewer.zoomIn();
+    } else if (e.ctrlKey && e.key === "-") {
+      e.preventDefault();
+      pdfViewer.zoomOut();
+    } else if (e.ctrlKey && e.key === "0") {
+      e.preventDefault();
+      pdfViewer.setZoom(1.0);
+    }
+  });
+
+  // --- Debug Panel ---
+  btnCloseDebug.addEventListener("click", () => {
+    debugPanel.style.display = "none";
+  });
+
+  // Click backdrop to close
+  debugPanel.addEventListener("click", (e) => {
+    if (e.target === debugPanel) {
+      debugPanel.style.display = "none";
+    }
+  });
+
+  // ============================================================
+  // Debug Panel: Python Worker Test
+  // ============================================================
 
   const btnInitWorker = document.getElementById("btn-init-worker");
   const btnPing = document.getElementById("btn-ping");
   const pingMessage = document.getElementById("ping-message");
   const workerStatus = document.getElementById("worker-status");
   const pingResult = document.getElementById("ping-result");
-
   let workerConnected = false;
 
-  // Initialize Python Worker
   btnInitWorker.addEventListener("click", async () => {
     try {
       btnInitWorker.disabled = true;
@@ -37,7 +360,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Send Ping
   btnPing.addEventListener("click", async () => {
     try {
       btnPing.disabled = true;
@@ -63,19 +385,21 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  // Audit Log Test
+  // ============================================================
+  // Debug Panel: Audit Log Test
+  // ============================================================
+
   const btnLogEvent = document.getElementById("btn-log-event");
   const btnVerifyChain = document.getElementById("btn-verify-chain");
   const auditLogResult = document.getElementById("audit-log-result");
   const logDirSpan = document.getElementById("log-dir");
 
-  // Show log directory on load
   (async () => {
     try {
       const dir = await invoke("get_log_dir");
       logDirSpan.textContent = dir;
     } catch (e) {
-      logDirSpan.textContent = "Error: " + e;
+      logDirSpan.textContent = "N/A (browser mode)";
     }
   })();
 
@@ -83,7 +407,6 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       btnLogEvent.disabled = true;
       auditLogResult.textContent = "Logging...";
-      const today = new Date().toISOString().split("T")[0];
       const record = await invoke("log_event", {
         event: "test_event",
         user: null,
@@ -114,7 +437,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Document State Test
+  // ============================================================
+  // Debug Panel: Document State Test
+  // ============================================================
+
   const docResult = document.getElementById("doc-result");
   const docStatusLabel = document.getElementById("doc-status-label");
   const btnCreateDoc = document.getElementById("btn-create-doc");
@@ -209,7 +535,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnToggleRegion.addEventListener("click", async () => {
     try {
-      // Get doc to find a region id
       const doc = await invoke("get_document");
       if (!doc || !doc.pages?.length || !doc.pages[0].regions?.length) {
         docResult.textContent = "No regions to toggle";
@@ -286,3 +611,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 });
+
+function toggleDebugPanel() {
+  debugPanel.style.display =
+    debugPanel.style.display === "none" ? "flex" : "none";
+}

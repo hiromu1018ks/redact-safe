@@ -25,72 +25,108 @@
           <div id="warning-banner">
             自動検出には漏れがある可能性があります。全ページを目視で確認してください
           </div>
+          <div id="pdf-toolbar">
+            <div class="pdf-toolbar-group">
+              <button id="btn-open-pdf" title="PDFを開く (Ctrl+O)">PDFを開く</button>
+              <span id="pdf-filename" class="pdf-filename"></span>
+            </div>
+            <div class="pdf-toolbar-group">
+              <button id="btn-zoom-out" title="縮小 (Ctrl+-)" disabled>&minus;</button>
+              <span id="zoom-level">150%</span>
+              <button id="btn-zoom-in" title="拡大 (Ctrl+=)" disabled>+</button>
+              <button id="btn-fit-width" title="幅に合わせる" disabled>幅に合わせ</button>
+            </div>
+            <div class="pdf-toolbar-group">
+              <button id="btn-prev-page" title="前のページ (&larr;)" disabled>&laquo;</button>
+              <input type="number" id="page-input" min="1" value="1" class="page-input" disabled />
+              <span class="page-separator">/</span>
+              <span id="total-pages">0</span>
+              <button id="btn-next-page" title="次のページ (&rarr;)" disabled>&raquo;</button>
+            </div>
+            <div class="pdf-toolbar-group coord-group">
+              <span id="coord-display" class="coord-display"></span>
+            </div>
+          </div>
           <div id="pdf-container">
-            <p>ファイルをドラッグ＆ドロップ、または「ファイル」メニューからPDFを選択してください</p>
-            <div id="worker-test-panel" class="worker-test">
-              <h3>Python Worker Test</h3>
-              <div class="worker-test-row">
-                <button id="btn-init-worker">Initialize Worker</button>
-                <span id="worker-status">Not initialized</span>
-              </div>
-              <div class="worker-test-row">
-                <button id="btn-ping" disabled>Send Ping</button>
-                <input type="text" id="ping-message" placeholder="Message (optional)" value="hello" />
-                <span id="ping-result"></span>
-              </div>
-            </div>
-            <div id="audit-log-test-panel" class="worker-test">
-              <h3>Audit Log Test</h3>
-              <div class="worker-test-row">
-                <button id="btn-log-event">Log Test Event</button>
-                <button id="btn-verify-chain">Verify Chain</button>
-                <span id="audit-log-result"></span>
-              </div>
-              <div class="worker-test-row">
-                <label>Log dir:</label>
-                <span id="log-dir">-</span>
-              </div>
-            </div>
-            <div id="doc-state-test-panel" class="worker-test">
-              <h3>Document State Test</h3>
-              <div class="worker-test-row">
-                <button id="btn-create-doc">Create Doc</button>
-                <button id="btn-get-doc">Get Doc</button>
-                <button id="btn-get-summary">Summary</button>
-                <span id="doc-status-label">-</span>
-              </div>
-              <div class="worker-test-row">
-                <button id="btn-add-page">Add Page</button>
-                <button id="btn-add-region">Add Region</button>
-                <button id="btn-toggle-region">Toggle Region</button>
-                <button id="btn-remove-region">Remove Region</button>
-              </div>
-              <div class="worker-test-row">
-                <button id="btn-all-on">All ON</button>
-                <button id="btn-all-off">All OFF</button>
-              </div>
-              <div class="worker-test-row">
-                <button id="btn-confirm-doc">Confirm</button>
-                <button id="btn-rollback-doc">Rollback</button>
-                <button id="btn-finalize-doc">Finalize</button>
-              </div>
-              <div class="worker-test-row">
-                <label>Result:</label>
-                <span id="doc-result" class="doc-result-text"></span>
-              </div>
-            </div>
+            <canvas id="pdf-canvas"></canvas>
+            <p id="pdf-placeholder">
+              ファイルをドラッグ＆ドロップ、または「PDFを開く」ボタンからPDFを選択してください
+            </p>
           </div>
         </section>
       </main>
       <footer>
         <div id="toolbar">
-          <button id="btn-all-on" disabled>全てON</button>
-          <button id="btn-all-off" disabled>全てOFF</button>
+          <button id="btn-toolbar-all-on" disabled>全てON</button>
+          <button id="btn-toolbar-all-off" disabled>全てOFF</button>
           <span id="status-display">未読込</span>
           <button id="btn-finalize" disabled>確定して出力</button>
         </div>
       </footer>
     </div>
+
+    <!-- Debug Panel (Ctrl+Shift+D to toggle) -->
+    <div id="debug-panel" class="debug-overlay" style="display:none">
+      <div class="debug-content">
+        <div class="debug-header">
+          <span>Debug Panel (Ctrl+Shift+D to close)</span>
+          <button id="btn-close-debug">&times;</button>
+        </div>
+        <div id="worker-test-panel" class="worker-test">
+          <h3>Python Worker Test</h3>
+          <div class="worker-test-row">
+            <button id="btn-init-worker">Initialize Worker</button>
+            <span id="worker-status">Not initialized</span>
+          </div>
+          <div class="worker-test-row">
+            <button id="btn-ping" disabled>Send Ping</button>
+            <input type="text" id="ping-message" placeholder="Message (optional)" value="hello" />
+            <span id="ping-result"></span>
+          </div>
+        </div>
+        <div id="audit-log-test-panel" class="worker-test">
+          <h3>Audit Log Test</h3>
+          <div class="worker-test-row">
+            <button id="btn-log-event">Log Test Event</button>
+            <button id="btn-verify-chain">Verify Chain</button>
+            <span id="audit-log-result"></span>
+          </div>
+          <div class="worker-test-row">
+            <label>Log dir:</label>
+            <span id="log-dir">-</span>
+          </div>
+        </div>
+        <div id="doc-state-test-panel" class="worker-test">
+          <h3>Document State Test</h3>
+          <div class="worker-test-row">
+            <button id="btn-create-doc">Create Doc</button>
+            <button id="btn-get-doc">Get Doc</button>
+            <button id="btn-get-summary">Summary</button>
+            <span id="doc-status-label">-</span>
+          </div>
+          <div class="worker-test-row">
+            <button id="btn-add-page">Add Page</button>
+            <button id="btn-add-region">Add Region</button>
+            <button id="btn-toggle-region">Toggle Region</button>
+            <button id="btn-remove-region">Remove Region</button>
+          </div>
+          <div class="worker-test-row">
+            <button id="btn-all-on">All ON</button>
+            <button id="btn-all-off">All OFF</button>
+          </div>
+          <div class="worker-test-row">
+            <button id="btn-confirm-doc">Confirm</button>
+            <button id="btn-rollback-doc">Rollback</button>
+            <button id="btn-finalize-doc">Finalize</button>
+          </div>
+          <div class="worker-test-row">
+            <label>Result:</label>
+            <span id="doc-result" class="doc-result-text"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

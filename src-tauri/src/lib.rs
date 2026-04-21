@@ -350,6 +350,7 @@ fn get_document_summary(state: State<DocumentState>) -> Result<Option<serde_json
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(WorkerState(Mutex::new(None)))
         .manage(AuditState(Mutex::new(
             AuditLogger::new().expect("Failed to initialize audit logger"),

@@ -235,7 +235,7 @@ Tauri Desktop App
       "PDF.jsのレンダリング座標系とアプリのPDF point座標系の対応を確認",
       "10ページのテストPDFでページ切替が正常動作することを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "feature",
