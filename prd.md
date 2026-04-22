@@ -339,7 +339,7 @@ v1と同じ（変更なし）
       "サイドバーのonSidebarRegionClick()でsetTimeout(200ms)をpdfViewerのonPageChangeコールバックに置き換え",
       "npm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "integration",

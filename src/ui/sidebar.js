@@ -171,18 +171,17 @@ async function onSidebarRegionClick(region) {
   const { pdfViewer, maskingOverlay } = appState;
   const pageNum = region._page;
 
-  // Navigate to the correct page if needed
   if (pdfViewer.isLoaded && pdfViewer.currentPage !== pageNum) {
+    // Store pending region selection; onPageChange callback will apply it
+    appState._pendingSidebarRegionId = region.id;
     await pdfViewer.goToPage(pageNum);
-  }
-
-  // Wait a bit for the page to render, then select the region
-  setTimeout(() => {
+  } else {
+    // Already on the correct page — select immediately
     if (maskingOverlay) {
       maskingOverlay.setSelectedRegion(region.id);
-      renderSidebar(); // Update selection highlight in sidebar
+      renderSidebar();
     }
-  }, 200);
+  }
 }
 
 // --- Filter change handlers ---

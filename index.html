@@ -294,6 +294,23 @@
       </div>
     </div>
 
+    <!-- Reopen Confirmation Dialog -->
+    <div id="reopen-confirm-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="reopen-confirm-dialog-title" style="display:none">
+      <div class="modal-content modal-warning">
+        <div class="modal-header">
+          <h3 id="reopen-confirm-dialog-title">PDFを再オープンしますか？</h3>
+        </div>
+        <div class="modal-body">
+          <p>現在開いているPDFを閉じ、新しいPDFを開きます。</p>
+          <p class="modal-hint">現在のマスキング状態や編集履歴はすべて失われます。この操作は元に戻せません。</p>
+        </div>
+        <div class="modal-footer">
+          <button id="btn-reopen-confirm-cancel" class="modal-btn modal-btn-secondary">キャンセル</button>
+          <button id="btn-reopen-confirm-proceed" class="modal-btn modal-btn-primary">再オープン</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Settings Dialog -->
     <div id="settings-dialog" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="settings-dialog-title" style="display:none">
       <div class="modal-content modal-content-wide">

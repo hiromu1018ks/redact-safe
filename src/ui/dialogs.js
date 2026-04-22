@@ -435,3 +435,48 @@ helpDialog.addEventListener("keydown", (e) => {
     hideHelpDialog();
   }
 });
+
+// ============================================================
+// Reopen Confirmation Dialog
+// ============================================================
+
+const reopenConfirmDialog = document.getElementById("reopen-confirm-dialog");
+const btnReopenConfirmProceed = document.getElementById("btn-reopen-confirm-proceed");
+const btnReopenConfirmCancel = document.getElementById("btn-reopen-confirm-cancel");
+
+export function showReopenConfirmDialog() {
+  return new Promise((resolve) => {
+    reopenConfirmDialog.style.display = "flex";
+    btnReopenConfirmCancel.focus();
+    trapFocus(reopenConfirmDialog);
+
+    function cleanup() {
+      reopenConfirmDialog.style.display = "none";
+      btnReopenConfirmProceed.removeEventListener("click", onProceed);
+      btnReopenConfirmCancel.removeEventListener("click", onCancel);
+      reopenConfirmDialog.removeEventListener("keydown", onKeydown);
+    }
+
+    function onProceed() {
+      cleanup();
+      resolve(true);
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(false);
+    }
+
+    function onKeydown(e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+      }
+    }
+
+    btnReopenConfirmProceed.addEventListener("click", onProceed);
+    btnReopenConfirmCancel.addEventListener("click", onCancel);
+    reopenConfirmDialog.addEventListener("keydown", onKeydown);
+  });
+}

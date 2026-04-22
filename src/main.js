@@ -8,7 +8,7 @@ import { closeAllMenus, isMenuOpen } from "./ui/menu.js";
 import {
   trapFocus,
   showPasswordDialog, showPasswordError, showSignatureDialog,
-  showOperatorDialog, showFinalizerWarningDialog,
+  showOperatorDialog, showFinalizerWarningDialog, showReopenConfirmDialog,
   showSettingsDialog, hideSettingsDialog, isSettingsDialogOpen,
   showHelpDialog, hideHelpDialog, isHelpDialogOpen,
 } from "./ui/dialogs.js";
@@ -914,6 +914,16 @@ function initPdfViewer() {
     }
 
     fetchAndDisplayRegions(pageNum);
+
+    // Apply pending sidebar region selection after page change
+    if (appState._pendingSidebarRegionId) {
+      const regionId = appState._pendingSidebarRegionId;
+      appState._pendingSidebarRegionId = null;
+      if (maskingOverlay) {
+        maskingOverlay.setSelectedRegion(regionId);
+        renderSidebar();
+      }
+    }
   };
 
   pdfViewer.onZoomChange = (scale) => {
@@ -1049,7 +1059,11 @@ async function decryptPdfWithWorker(pdfData, password) {
 }
 
 async function loadPdfWithAnalysis(arrayBuffer, fileName) {
+  // Reset all global state for clean start (or reopen)
   undoManager.clear();
+  appState.testRegions = [];
+  appState.allRegionsByPage = {};
+  watermarkEl.style.display = "none";
 
   const analysis = await analyzePdfWithWorker(arrayBuffer);
 
@@ -1212,11 +1226,36 @@ async function runPiiDetection(arrayBuffer, pageCount, password) {
   }
 }
 
+// ============================================================
+// Base64 → Uint8Array (direct decode, no intermediate string)
+// ============================================================
+
+const _B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const _B64LUT = new Uint8Array(256);
+for (let i = 0; i < _B64.length; i++) _B64LUT[_B64.charCodeAt(i)] = i;
+
+function base64ToUint8Array(base64) {
+  const len = base64.length;
+  const pad = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  const out = new Uint8Array((len * 3) / 4 - pad);
+  let j = 0;
+  for (let i = 0; i < len; i += 4) {
+    const a = _B64LUT[base64.charCodeAt(i)];
+    const b = _B64LUT[base64.charCodeAt(i + 1)];
+    const c = i + 2 < len ? _B64LUT[base64.charCodeAt(i + 2)] : 0;
+    const d = i + 3 < len ? _B64LUT[base64.charCodeAt(i + 3)] : 0;
+    out[j++] = (a << 2) | (b >> 4);
+    if (i + 2 < len) out[j++] = ((b & 15) << 4) | (c >> 2);
+    if (i + 3 < len) out[j++] = ((c & 3) << 6) | d;
+  }
+  return out;
+}
+
 async function openPdfFile() {
   console.log("openPdfFile called, isTauri:", isTauri, "status:", docStatusManager.getStatus());
   if (docStatusManager.getStatus()) {
-    console.log("Blocked: document already loaded");
-    return;
+    const proceed = await showReopenConfirmDialog();
+    if (!proceed) return;
   }
 
   let result = null;
@@ -1235,11 +1274,7 @@ async function openPdfFile() {
       appState.currentPdfPassword = "";
       console.log("Reading file via Tauri invoke...");
       const base64Data = await window.__TAURI__.core.invoke("read_file_as_base64", { path: filePath });
-      const binaryStr = atob(base64Data);
-      const arrayBuffer = new Uint8Array(binaryStr.length);
-      for (let i = 0; i < binaryStr.length; i++) {
-        arrayBuffer[i] = binaryStr.charCodeAt(i);
-      }
+      const arrayBuffer = base64ToUint8Array(base64Data);
       const fileName = filePath.split(/[/\\]/).pop() || "document.pdf";
       result = { data: arrayBuffer.buffer, fileName };
       console.log("File loaded, size:", arrayBuffer.byteLength);
