@@ -56,9 +56,11 @@ _managed_temp_files = []
 
 
 def secure_delete_file(filepath):
-    """Securely delete a file by overwriting with zeros/random data before unlinking.
+    """Securely delete a file by overwriting with zeros before unlinking.
 
-    This prevents data recovery from disk sectors that held the file contents.
+    Uses a single zero-fill pass. Multiple passes are counterproductive on SSDs
+    due to wear leveling and write amplification — they reduce device lifespan
+    without improving data security since the SSD controller remaps sectors.
     """
     try:
         file_size = os.path.getsize(filepath)
@@ -66,19 +68,7 @@ def secure_delete_file(filepath):
             os.unlink(filepath)
             return
 
-        # Pass 1: Overwrite with zeros
-        with open(filepath, "wb") as f:
-            f.write(b"\x00" * file_size)
-            f.flush()
-            os.fsync(f.fileno())
-
-        # Pass 2: Overwrite with random data
-        with open(filepath, "wb") as f:
-            f.write(os.urandom(min(file_size, 1024 * 1024)))  # Up to 1MB of random data
-            f.flush()
-            os.fsync(f.fileno())
-
-        # Pass 3: Overwrite with zeros again
+        # Single pass: overwrite with zeros
         with open(filepath, "wb") as f:
             f.write(b"\x00" * file_size)
             f.flush()

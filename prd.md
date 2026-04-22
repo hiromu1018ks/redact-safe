@@ -132,7 +132,7 @@ v1と同じ（変更なし）
       "一時ファイルがメモリ上のみの場合はファイル書き込み自体をスキップする条件を追加",
       "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "stability",
