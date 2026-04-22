@@ -27,13 +27,29 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": [],
+    "copyright": "Copyright 2026 RedactSafe",
+    "category": "Utilities",
+    "shortDescription": "PDF Redaction Tool",
+    "longDescription": "RedactSafe is a desktop application for safely redacting sensitive information from PDF documents.",
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      },
+      "nsis": {
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "languages": ["Japanese", "English"]
+      }
+    }
   }
 }

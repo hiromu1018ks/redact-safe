@@ -544,7 +544,7 @@ Tauri Desktop App
       "インストーラーでWebView2自動セットアップが動作することを確認",
       "クリーンなWindows環境でインストール→起動→基本操作が動作することを確認"
     ],
-    "passes": false
+    "passes": true
   }
 ]
 ```

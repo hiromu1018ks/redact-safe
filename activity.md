@@ -2,8 +2,8 @@
 
 ## Current Status
 **Last Updated:** 2026-04-22
-**Tasks Completed:** 26 / 27
-**Current Task:** Task 26 - 状態遷移制約・ロール権限・監査ログの統合テストを実行する (完了)
+**Tasks Completed:** 27 / 27
+**Current Task:** Task 27 - PyInstallerによるPythonワーカーのバンドルとWindowsインストーラーを作成する (完了)
 
 ---
 
@@ -1071,3 +1071,30 @@
 - `npm run build` - 成功
 
 **課題:** 50ページPDFを10回連続処理のストレステストは未実施（Tauri環境 + Python環境が必要）。日次ルートハッシュのファイル保存は `%APPDATA%/RedactSafe/logs/` に実装済み。
+
+### 2026-04-22 - Task 27: PyInstallerによるPythonワーカーのバンドルとWindowsインストーラーを作成する
+
+**変更内容:**
+
+- **Tauriバンドル設定** (`src-tauri/tauri.conf.json`)
+  - `bundle.targets` を `["nsis"]` に設定（NSISベースのWindowsインストーラー）
+  - `bundle.windows.webviewInstallMode` を `offlineInstaller` に設定（WebView2オフラインインストーラー同梱）
+  - `bundle.windows.nsis` 設定: currentUserインストール、日本語+英語対応、アイコン設定
+  - `bundle.copyright`, `bundle.category`, `bundle.shortDescription`, `bundle.longDescription` を追加
+
+- **Releaseプロファイル最適化** (`src-tauri/Cargo.toml`)
+  - `[profile.release]` セクションを追加: `strip=true`, `lto=true`, `codegen-units=1`, `opt-level="s"`
+  - バイナリサイズの最小化と実行パフォーマンスの向上
+
+- **PyInstaller specファイル** (`python-worker/worker.spec`)
+  - `worker.py` のstandalone実行形式ビルド用specを作成
+  - `detection_rules.yaml` をdatasとしてバンドル
+  - PyMuPDF, Pillow, pyyaml等のコア依存関係をhiddenimportsに指定
+  - PaddleOCR/PaddlePaddleをexcludesに指定（重量依存のため別途対応）
+  - UPX圧縮、consoleモード、strip有効
+
+**実行コマンド:**
+- `cargo check` (src-tauri/) - 成功
+- `npm run build` - 成功
+
+**課題:** PyInstallerでの実際のビルドは未実施（PyInstallerのインストールが必要）。PaddleOCR/PaddlePaddleのバンドルは別途対応が必要。WebView2オフラインインストーラーの実際の動作確認はインストーラービルド後に検証必要。
