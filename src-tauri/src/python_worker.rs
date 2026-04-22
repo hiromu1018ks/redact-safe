@@ -267,6 +267,17 @@ impl PythonWorker {
     }
 }
 
+impl Drop for PythonWorker {
+    fn drop(&mut self) {
+        // Signal stderr reader to stop
+        self.stderr_stop.store(true, Ordering::Relaxed);
+        // Kill the child process if still running
+        let _ = self.child.kill();
+        // Wait for the process to exit to prevent zombies
+        let _ = self.child.wait();
+    }
+}
+
 // Response types for Tauri commands
 #[derive(Serialize, Deserialize)]
 pub struct PingResponse {

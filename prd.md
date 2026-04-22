@@ -144,7 +144,7 @@ v1と同じ（変更なし）
       "WorkerStateのMutexがdropされた時に自動的にプロセスが終了することを確認",
       "cargo test、cargo clippyが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "stability",
