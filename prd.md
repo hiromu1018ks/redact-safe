@@ -234,7 +234,7 @@ v1と同じ（変更なし）
       "テストケースを追加：回転統合、行マージ上限、テキスト結合の確認",
       "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "detection",

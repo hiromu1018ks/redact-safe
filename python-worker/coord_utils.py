@@ -151,3 +151,44 @@ def rotate_bbox(
 
     # Should never reach here
     return list(bbox)
+
+
+def bbox_to_rotated_space(
+    bbox: List[float],
+    rotation_deg: int,
+    page_width_pt: float,
+    page_height_pt: float,
+) -> List[float]:
+    """Transform a bbox from original (unrotated) PDF space to rotated (display) space.
+
+    This is the inverse of rotate_bbox(). When PyMuPDF renders a rotated page
+    via get_pixmap, the output image is in the rotated visual coordinate space.
+    Use this to transform stored bboxes for rendering on the rasterized image.
+
+    Args:
+        bbox: [x, y, width, height] in the original (unrotated) PDF coordinate space.
+        rotation_deg: Page rotation in degrees (0, 90, 180, 270).
+        page_width_pt: Width of the page in PDF points (unrotated).
+        page_height_pt: Height of the page in PDF points (unrotated).
+
+    Returns:
+        [x, y, width, height] in the rotated (display) coordinate space.
+    """
+    if rotation_deg == 0:
+        return list(bbox)
+
+    if rotation_deg not in (90, 180, 270):
+        raise ValueError(
+            f"Unsupported rotation: {rotation_deg}. Must be 0, 90, 180, or 270."
+        )
+
+    x, y, w, h = bbox
+
+    if rotation_deg == 90:
+        return [page_height_pt - y - h, x, h, w]
+    elif rotation_deg == 180:
+        return [page_width_pt - x - w, page_height_pt - y - h, w, h]
+    elif rotation_deg == 270:
+        return [y, page_width_pt - x - w, h, w]
+
+    return list(bbox)

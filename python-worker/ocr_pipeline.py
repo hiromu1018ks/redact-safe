@@ -245,6 +245,37 @@ def recognize_text_tesseract(
     return regions
 
 
+def _bboxes_overlap(a, b, threshold=0.3):
+    """Check if two pixel-space bboxes overlap by more than the given IoU threshold.
+
+    Each bbox is [x, y, width, height].
+
+    Returns:
+        True if IoU > threshold.
+    """
+    if not a or not b or len(a) < 4 or len(b) < 4:
+        return False
+
+    ax1, ay1, aw, ah = a[0], a[1], a[2], a[3]
+    bx1, by1, bw, bh = b[0], b[1], b[2], b[3]
+    ax2, ay2 = ax1 + aw, ay1 + ah
+    bx2, by2 = bx1 + bw, by1 + bh
+
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+
+    intersection = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    area_a = aw * ah
+    area_b = bw * bh
+    union = area_a + area_b - intersection
+
+    if union <= 0:
+        return False
+    return (intersection / union) > threshold
+
+
 def run_ocr_pipeline(
     doc, page_num: int, dpi: int = 300, progress_callback=None
 ) -> Dict[str, Any]:
@@ -291,10 +322,32 @@ def run_ocr_pipeline(
         progress_callback("tesseract_check", 2, 3, "低信頼度領域を確認中...")
 
     # Step 3: Check for low-confidence regions and fall back to Tesseract
+    # Table regions from layout analysis are more likely to need Tesseract fallback
     low_conf_regions = [
         r for r in text_regions
         if r["confidence"] < 0.5
     ]
+
+    # Check if any text regions fall within table layout regions
+    table_layout_bboxes = []
+    if layout_regions:
+        for lr in layout_regions:
+            if lr.get("type") in ("table",):
+                table_layout_bboxes.append(lr.get("bbox_px", []))
+
+        # If text regions are inside table areas, lower the confidence threshold
+        # to trigger Tesseract fallback more aggressively for tables
+        if table_layout_bboxes:
+            for region in text_regions:
+                if region["confidence"] >= 0.5 and region["confidence"] < 0.7:
+                    region_bbox = region.get("bbox_px", [])
+                    if len(region_bbox) == 4:
+                        for table_bbox in table_layout_bboxes:
+                            if len(table_bbox) == 4 and _bboxes_overlap(
+                                region_bbox, table_bbox, threshold=0.3
+                            ):
+                                low_conf_regions.append(region)
+                                break
 
     tesseract_regions = []
     if low_conf_regions:

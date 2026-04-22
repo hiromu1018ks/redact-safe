@@ -108,6 +108,7 @@ from coord_utils import (
     bbox_pdf_point_to_pixel,
     bbox_pixel_to_pdf_point,
     rotate_bbox,
+    bbox_to_rotated_space,
 )
 from ocr_pipeline import (
     run_ocr_pipeline_base64,
@@ -647,27 +648,6 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
     total_pages = len(pages_info)
     total_regions_masked = 0
 
-    def _transform_bbox_for_rotation(bbox, rotation_deg, page_w_pt, page_h_pt):
-        """Transform bbox from unrotated PDF point space to rotated visual space.
-
-        When PyMuPDF renders a rotated page via get_pixmap, the output image
-        is in the rotated visual coordinate space. Our stored bboxes are in
-        the unrotated MediaBox space, so we need to transform them.
-        """
-        if rotation_deg == 0:
-            return bbox
-
-        x, y, w, h = bbox
-
-        if rotation_deg == 90:
-            # 90° CW: original → rotated
-            return [page_h_pt - y - h, x, h, w]
-        elif rotation_deg == 180:
-            return [page_w_pt - x - w, page_h_pt - y - h, w, h]
-        elif rotation_deg == 270:
-            return [y, page_w_pt - x - w, h, w]
-        return bbox
-
     try:
         # Create new output PDF
         out_doc = fitz.open()
@@ -706,9 +686,10 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
                 x_pt, y_pt, w_pt, h_pt = bbox
 
                 # Transform bbox to rotated visual space if needed
-                x_pt, y_pt, w_pt, h_pt = _transform_bbox_for_rotation(
+                transformed = bbox_to_rotated_space(
                     [x_pt, y_pt, w_pt, h_pt], rotation_deg, width_pt, height_pt
                 )
+                x_pt, y_pt, w_pt, h_pt = transformed
 
                 # Apply margin (clamp to non-negative)
                 mx = max(0, x_pt - margin_pt)
