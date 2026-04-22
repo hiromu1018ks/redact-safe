@@ -8,3 +8,5 @@ clerk-nextjs-guide
 .cache/
 .venv/
 .playwright-mcp/
+__pycache__/
+screenshots/
