@@ -260,7 +260,7 @@ v1と同じ（変更なし）
       "loadPdfWithAnalysis()の開始時にundoManagerをclear()する",
       "npm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "ux",

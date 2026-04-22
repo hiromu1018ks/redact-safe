@@ -208,12 +208,15 @@ btnSidebarAllOn.addEventListener("click", async () => {
     return;
   }
   try {
+    undoManager.beginMacro("全てON");
     const count = await invoke("set_all_regions_enabled", { pageNum: null, enabled: true });
+    undoManager.endMacro();
     await refreshOverlay();
     await updateSidebarRegions();
     logAuditEvent("all_regions_enabled", null, { count });
     await autoSaveDocument();
   } catch (e) {
+    undoManager.endMacro();
     console.error("Failed to enable all regions:", e);
   }
 });
@@ -227,12 +230,15 @@ btnSidebarAllOff.addEventListener("click", async () => {
     return;
   }
   try {
+    undoManager.beginMacro("全てOFF");
     const count = await invoke("set_all_regions_enabled", { pageNum: null, enabled: false });
+    undoManager.endMacro();
     await refreshOverlay();
     await updateSidebarRegions();
     logAuditEvent("all_regions_disabled", null, { count });
     await autoSaveDocument();
   } catch (e) {
+    undoManager.endMacro();
     console.error("Failed to disable all regions:", e);
   }
 });
@@ -1023,10 +1029,33 @@ async function performUndo() {
   const op = undoManager.pop();
   if (!op) return;
 
+  // Handle macro undo (batch of operations)
+  if (op.type === "macro") {
+    for (const macroOp of op.ops) {
+      await undoSingleOp(macroOp);
+    }
+    logAuditEvent("undo_macro", null, { label: op.label, count: op.ops.length });
+  } else {
+    await undoSingleOp(op);
+  }
+
+  await refreshOverlay();
+  await autoSaveDocument();
+  await updateSidebarRegions();
+}
+
+/**
+ * Undo a single operation, navigating to the correct page if needed.
+ */
+async function undoSingleOp(op) {
   const pageNum = op.pageNum;
 
+  // Navigate to the correct page if the operation was on a different page
+  if (pdfViewer.isLoaded && pdfViewer.currentPage !== pageNum) {
+    await pdfViewer.goToPage(pageNum);
+  }
+
   if (op.type === "move" || op.type === "resize") {
-    // Restore previous bbox
     await persistRegionUpdate(pageNum, op.regionId, { bbox: op.prevBbox });
     maskingOverlay.setSelectedRegion(op.regionId);
     logAuditEvent("undo_" + op.type, null, {
@@ -1035,14 +1064,12 @@ async function performUndo() {
       restored_bbox: op.prevBbox,
     });
   } else if (op.type === "add") {
-    // Remove the added region
     await persistRemoveRegion(pageNum, op.regionId);
     logAuditEvent("undo_add", null, {
       region_id: op.regionId,
       page: pageNum,
     });
   } else if (op.type === "remove") {
-    // Re-add the removed region
     await persistAddRegion(pageNum, op.snapshot);
     maskingOverlay.setSelectedRegion(op.regionId);
     logAuditEvent("undo_remove", null, {
@@ -1050,7 +1077,6 @@ async function performUndo() {
       page: pageNum,
     });
   } else if (op.type === "toggle") {
-    // Toggle back
     await persistToggleRegion(pageNum, op.regionId);
     maskingOverlay.setSelectedRegion(op.regionId);
     logAuditEvent("undo_toggle", null, {
@@ -1058,10 +1084,6 @@ async function performUndo() {
       page: pageNum,
     });
   }
-
-  await refreshOverlay();
-  await autoSaveDocument();
-  await updateSidebarRegions();
 }
 
 /**
@@ -1684,6 +1706,9 @@ async function decryptPdfWithWorker(pdfData, password) {
 
 // --- Main PDF Load Flow ---
 async function loadPdfWithAnalysis(arrayBuffer, fileName) {
+  // Clear undo history when loading a new PDF
+  undoManager.clear();
+
   // Step 1: Analyze PDF via Python worker (if available)
   const analysis = await analyzePdfWithWorker(arrayBuffer);
 
@@ -2143,12 +2168,15 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     try {
+      undoManager.beginMacro("全てON");
       await invoke("set_all_regions_enabled", { pageNum: null, enabled: true });
+      undoManager.endMacro();
       await refreshOverlay();
       await updateSidebarRegions();
       logAuditEvent("all_regions_enabled", null, {});
       await autoSaveDocument();
     } catch (e) {
+      undoManager.endMacro();
       console.error("Failed to enable all regions:", e);
     }
   });
@@ -2161,12 +2189,15 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     try {
+      undoManager.beginMacro("全てOFF");
       await invoke("set_all_regions_enabled", { pageNum: null, enabled: false });
+      undoManager.endMacro();
       await refreshOverlay();
       await updateSidebarRegions();
       logAuditEvent("all_regions_disabled", null, {});
       await autoSaveDocument();
     } catch (e) {
+      undoManager.endMacro();
       console.error("Failed to disable all regions:", e);
     }
   });

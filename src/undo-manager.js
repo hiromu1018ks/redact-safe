@@ -11,6 +11,8 @@ export class UndoManager {
     this._stack = [];
     /** Max undo depth */
     this._maxDepth = 50;
+    /** @type {object|null} Current macro being recorded */
+    this._macro = null;
   }
 
   get canUndo() {
@@ -24,10 +26,34 @@ export class UndoManager {
   /** Clear all undo history */
   clear() {
     this._stack = [];
+    this._macro = null;
   }
 
   /**
-   * Push an operation onto the undo stack.
+   * Begin recording a macro (batch of operations that undo as one step).
+   * @param {string} label - Description for the macro (e.g. "全てON")
+   */
+  beginMacro(label = "macro") {
+    this._macro = { type: "macro", label, ops: [] };
+  }
+
+  /**
+   * End recording a macro and push it onto the undo stack.
+   * If no macro is being recorded, this is a no-op.
+   */
+  endMacro() {
+    if (!this._macro) return;
+    if (this._macro.ops.length > 0) {
+      this._stack.push(this._macro);
+      if (this._stack.length > this._maxDepth) {
+        this._stack.shift();
+      }
+    }
+    this._macro = null;
+  }
+
+  /**
+   * Push an operation onto the undo stack (or into the current macro).
    * @param {object} op - { type, pageNum, regionId, snapshot? }
    *   - type: "add" | "remove" | "move" | "resize" | "toggle"
    *   - pageNum: page number the operation affects
@@ -36,14 +62,18 @@ export class UndoManager {
    *   - prevBbox: [x,y,w,h] before move/resize
    */
   push(op) {
-    this._stack.push(op);
-    if (this._stack.length > this._maxDepth) {
-      this._stack.shift();
+    if (this._macro) {
+      this._macro.ops.push(op);
+    } else {
+      this._stack.push(op);
+      if (this._stack.length > this._maxDepth) {
+        this._stack.shift();
+      }
     }
   }
 
   /**
-   * Pop the most recent operation. Returns null if empty.
+   * Pop the most recent operation (or macro). Returns null if empty.
    * @returns {object|null}
    */
   pop() {
