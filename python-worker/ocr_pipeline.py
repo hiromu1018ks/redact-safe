@@ -78,7 +78,10 @@ def _check_tesseract() -> bool:
 def _render_page_to_image(
     doc, page_num: int, dpi: int = 300
 ) -> "PIL.Image.Image":
-    """Render a PDF page to a PIL Image at the specified DPI."""
+    """Render a PDF page to a PIL Image at the specified DPI.
+
+    Uses Image.frombytes to avoid PNG encode/decode round-trip for efficiency.
+    """
     import fitz
     from PIL import Image
 
@@ -87,8 +90,7 @@ def _render_page_to_image(
     zoom = dpi / 72.0
     mat = fitz.Matrix(zoom, zoom)
     pix = page.get_pixmap(matrix=mat, alpha=False)
-    img_data = pix.tobytes("png")
-    img = Image.open(io.BytesIO(img_data))
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
     return img
 
 
@@ -99,7 +101,7 @@ def _image_to_numpy(img: "PIL.Image.Image"):
 
 
 def analyze_layout(
-    doc, page_num: int, dpi: int = 300
+    doc, page_num: int, dpi: int = 300, page_image: "PIL.Image.Image" = None
 ) -> List[Dict[str, Any]]:
     """Analyze page layout using PaddleOCR PPStructure.
 
@@ -109,8 +111,9 @@ def analyze_layout(
     engine = _get_paddle_layout_engine()
     if engine is None:
         return []
-    img = _render_page_to_image(doc, page_num, dpi)
-    img_np = _image_to_numpy(img)
+    if page_image is None:
+        page_image = _render_page_to_image(doc, page_num, dpi)
+    img_np = _image_to_numpy(page_image)
 
     result = engine(img_np)
 
@@ -156,15 +159,16 @@ def _normalize_layout_type(raw_type: str) -> str:
 
 
 def recognize_text_paddleocr(
-    doc, page_num: int, dpi: int = 300
+    doc, page_num: int, dpi: int = 300, page_image: "PIL.Image.Image" = None
 ) -> List[Dict[str, Any]]:
     """Run PaddleOCR text recognition on a single PDF page.
 
     Returns a list of text regions with bbox, text, and confidence.
     """
     engine = _get_paddle_ocr_engine()
-    img = _render_page_to_image(doc, page_num, dpi)
-    img_np = _image_to_numpy(img)
+    if page_image is None:
+        page_image = _render_page_to_image(doc, page_num, dpi)
+    img_np = _image_to_numpy(page_image)
 
     result = engine.ocr(img_np, cls=True)
 
@@ -194,7 +198,8 @@ def recognize_text_paddleocr(
 
 
 def recognize_text_tesseract(
-    doc, page_num: int, dpi: int = 300, lang: str = "jpn+eng"
+    doc, page_num: int, dpi: int = 300, lang: str = "jpn+eng",
+    page_image: "PIL.Image.Image" = None
 ) -> List[Dict[str, Any]]:
     """Run Tesseract OCR as fallback for low-confidence regions.
 
@@ -206,7 +211,9 @@ def recognize_text_tesseract(
     import pytesseract
     from PIL import Image
 
-    img = _render_page_to_image(doc, page_num, dpi)
+    if page_image is None:
+        page_image = _render_page_to_image(doc, page_num, dpi)
+    img = page_image
 
     # Get word-level results with bounding boxes
     data = pytesseract.image_to_data(
@@ -254,14 +261,17 @@ def run_ocr_pipeline(
     if progress_callback:
         progress_callback("layout_analysis", 0, 3, "レイアウト解析中...")
 
+    # Render page image once and reuse across all steps
+    page_image = _render_page_to_image(doc, page_num, dpi)
+
     # Step 1: Layout analysis
-    layout_regions = analyze_layout(doc, page_num, dpi)
+    layout_regions = analyze_layout(doc, page_num, dpi, page_image=page_image)
 
     if progress_callback:
         progress_callback("text_recognition", 1, 3, "文字認識中...")
 
     # Step 2: PaddleOCR text recognition
-    text_regions = recognize_text_paddleocr(doc, page_num, dpi)
+    text_regions = recognize_text_paddleocr(doc, page_num, dpi, page_image=page_image)
 
     # Convert pixel bboxes to PDF point coordinates [x, y, width, height]
     page = doc[page_num]
@@ -290,7 +300,7 @@ def run_ocr_pipeline(
     if low_conf_regions:
         if progress_callback:
             progress_callback("tesseract_fallback", 2, 3, "Tesseractフォールバック実行中...")
-        tesseract_regions = recognize_text_tesseract(doc, page_num, dpi)
+        tesseract_regions = recognize_text_tesseract(doc, page_num, dpi, page_image=page_image)
         # Merge: replace low-confidence PaddleOCR results with Tesseract results
         # where Tesseract has higher confidence for overlapping regions
         text_regions = _merge_ocr_results(text_regions, tesseract_regions)

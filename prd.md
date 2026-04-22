@@ -120,7 +120,7 @@ v1と同じ（変更なし）
       "Python単体テストでレンダリング回数が1回/pageになることを確認",
       "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "performance",
