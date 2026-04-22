@@ -191,7 +191,7 @@ main {
 
 #sidebar-placeholder {
   padding: 16px;
-  color: #888;
+  color: #666;
   font-size: 13px;
   flex: 1;
   display: flex;
@@ -234,8 +234,9 @@ main {
   cursor: pointer;
 }
 
-.filter-select:focus {
-  outline: none;
+.filter-select:focus-visible {
+  outline: 2px solid #4a90d9;
+  outline-offset: -1px;
   border-color: #4a90d9;
 }
 
@@ -348,7 +349,7 @@ main {
 
 .region-item .region-meta {
   font-size: 11px;
-  color: #999;
+  color: #666;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -708,7 +709,7 @@ footer {
   background: #f0f0f0;
   border-top: 1px solid #ddd;
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 12px;
   color: #666;
 }
 
@@ -722,7 +723,7 @@ footer {
 .status-bar-badge {
   padding: 0 6px;
   border-radius: 3px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
@@ -1400,4 +1401,20 @@ body.font-size-xlarge .status-bar-badge { font-size: 12px; }
 
 #sidebar.collapsed ~ .sidebar-expand-btn {
   display: block;
+}
+
+/* ============================================================
+   Focus-Visible Styles (WCAG AA)
+   ============================================================ */
+
+button:focus-visible,
+.modal-btn:focus-visible,
+.sidebar-btn:focus-visible,
+.menu-trigger:focus-visible,
+.menu-item:focus-visible,
+.filter-select:focus-visible,
+.sidebar-toggle-btn:focus-visible,
+.sidebar-expand-btn:focus-visible {
+  outline: 2px solid #4a90d9;
+  outline-offset: 1px;
 }

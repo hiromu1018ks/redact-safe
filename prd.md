@@ -300,7 +300,7 @@ v1と同じ（変更なし）
       "ボタンにfocus-visibleスタイル（box-shadowによるフォーカスリング）を追加",
       "npm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "ux",
