@@ -157,7 +157,8 @@ def _open_pdf(params: dict, allow_encrypted_detection: bool = False):
 
     if pdf_path and os.path.isfile(pdf_path):
         doc = fitz.open(pdf_path)
-        pdf_bytes = open(pdf_path, "rb").read()
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
     else:
         pdf_bytes = base64.b64decode(pdf_data)
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")

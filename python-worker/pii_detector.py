@@ -10,7 +10,7 @@ import re
 import os
 import sys
 import uuid
-import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 
 # Valid PII type identifiers
@@ -26,8 +26,8 @@ OPTIONAL_RULE_FIELDS = {"confidence", "enabled", "description"}
 # Maximum regex match time (seconds) to prevent catastrophic backtracking
 REGEX_TIMEOUT_SECONDS = 2.0
 
-# Maximum number of regex backtracking steps
-REGEX_MAX_STEPS = 100000
+# Module-level cache for compiled rules (loaded once, reused across calls)
+_rules_cache = {"compiled": None, "rules_path": None}
 
 
 def _get_default_rules_path():
@@ -401,46 +401,57 @@ def detect_pii(text_regions, rules=None, rules_path=None, enabled_types=None,
             'id', 'text', 'bbox_pt', 'type', 'confidence', 'source',
             'rule_id', 'rule_name', 'start', 'end', 'original_region_id'
     """
-    # Load and merge rules (bundled + custom)
+    # Load and merge rules (bundled + custom), with module-level caching
     if rules is None:
-        bundled_rules = load_rules(rules_path)
-        if custom_rules_dir:
-            custom_rules, _ = load_custom_rules(custom_rules_dir)
-            rules = merge_rules(bundled_rules, custom_rules)
+        cache_key = (rules_path, custom_rules_dir)
+        if _rules_cache["rules_path"] == cache_key and _rules_cache["compiled"] is not None:
+            compiled = _rules_cache["compiled"]
         else:
-            rules = bundled_rules
+            bundled_rules = load_rules(rules_path)
+            if custom_rules_dir:
+                custom_rules, _ = load_custom_rules(custom_rules_dir)
+                rules = merge_rules(bundled_rules, custom_rules)
+            else:
+                rules = bundled_rules
+            compiled = _compile_rules(rules)
+            _rules_cache["rules_path"] = cache_key
+            _rules_cache["compiled"] = compiled
+    else:
+        compiled = _compile_rules(rules)
 
-    compiled = _compile_rules(rules)
     detections = []
+    executor = ThreadPoolExecutor(max_workers=1)
 
-    for region in text_regions:
-        text = region.get("text", "")
-        if not text:
-            continue
-
-        bbox = region.get("bbox_pt", region.get("bbox", []))
-        region_conf = region.get("confidence", 1.0)
-
-        for rule in compiled:
-            if enabled_types is not None and rule["type"] not in enabled_types:
+    try:
+        for region in text_regions:
+            text = region.get("text", "")
+            if not text:
                 continue
 
-            try:
-                start_time = time.monotonic()
-                matches = list(rule["compiled_pattern"].finditer(text))
-                elapsed = time.monotonic() - start_time
+            bbox = region.get("bbox_pt", region.get("bbox", []))
+            region_conf = region.get("confidence", 1.0)
 
-                if elapsed > REGEX_TIMEOUT_SECONDS:
+            for rule in compiled:
+                if enabled_types is not None and rule["type"] not in enabled_types:
+                    continue
+
+                try:
+                    # Run regex matching in a separate thread with timeout
+                    future = executor.submit(
+                        list, rule["compiled_pattern"].finditer(text)
+                    )
+                    matches = future.result(timeout=REGEX_TIMEOUT_SECONDS)
+                except FuturesTimeoutError:
                     sys.stderr.write(
-                        f"Warning: Rule '{rule['id']}' took {elapsed:.2f}s "
-                        f"(exceeded {REGEX_TIMEOUT_SECONDS}s timeout), skipping remaining matches\n"
+                        f"Warning: Rule '{rule['id']}' timed out "
+                        f"after {REGEX_TIMEOUT_SECONDS}s, skipping\n"
                     )
                     continue
-            except Exception as e:
-                sys.stderr.write(
-                    f"Warning: Error applying rule '{rule['id']}': {e}\n"
-                )
-                continue
+                except Exception as e:
+                    sys.stderr.write(
+                        f"Warning: Error applying rule '{rule['id']}': {e}\n"
+                    )
+                    continue
 
             for match in matches:
                 matched_text = match.group()
@@ -471,6 +482,7 @@ def detect_pii(text_regions, rules=None, rules_path=None, enabled_types=None,
         except Exception as e:
             sys.stderr.write(f"Warning: Name detection failed: {e}\n")
 
+    executor.shutdown(wait=False)
     return detections
 
 

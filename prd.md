@@ -192,7 +192,7 @@ v1と同じ（変更なし）
       "worker.pyの_open_pdf()でファイルハンドルをwith文で適切にクローズする",
       "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "detection",
