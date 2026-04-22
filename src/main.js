@@ -2045,33 +2045,13 @@ document.addEventListener("DOMContentLoaded", () => {
       progressManager.show();
       progressMessage.textContent = "安全PDFを生成中...";
 
-      // Read source PDF as base64
+      // Get source PDF file path
       const sourceFile = currentSourceFilePath || summary?.source_file;
       if (!sourceFile) {
         throw new Error("ソースPDFファイルのパスが見つかりません");
       }
 
-      const pdfArrayBuffer = await window.__TAURI__.core.invoke("read_file_as_base64", {
-        path: sourceFile,
-      });
-      const pdfDataBase64 = pdfArrayBuffer;
-
-      // Call finalize_masking_pdf to generate the redacted PDF
-      const result = await invoke("finalize_masking_pdf", {
-        pdfDataBase64: pdfDataBase64,
-        dpi: 300,
-        marginPt: 3.0,
-        password: currentPdfPassword || null,
-      });
-
-      const finalizedPdfBase64 = result?.pdf_data;
-      if (!finalizedPdfBase64) {
-        throw new Error("PDF生成に失敗しました");
-      }
-
-      progressMessage.textContent = "安全PDFを保存中...";
-
-      // Step 2: Show file save dialog
+      // Show file save dialog first (before processing)
       const outputPath = await window.__TAURI__.dialog.save({
         title: "安全PDFの保存",
         defaultPath: generateOutputPath(sourceFile),
@@ -2084,11 +2064,32 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      // Step 3: Save the finalized PDF to disk
-      await window.__TAURI__.core.invoke("save_base64_to_file", {
-        path: outputPath,
-        data: finalizedPdfBase64,
+      // Call finalize_masking_pdf with file path (no base64 encoding needed)
+      const result = await invoke("finalize_masking_pdf", {
+        pdfPath: sourceFile,
+        dpi: 300,
+        marginPt: 3.0,
+        password: currentPdfPassword || null,
       });
+
+      const tempOutputPath = result?.output_path;
+      if (!tempOutputPath) {
+        throw new Error("PDF生成に失敗しました");
+      }
+
+      // Copy the temp output file to the user-chosen destination
+      await window.__TAURI__.core.invoke("copy_file", {
+        from: tempOutputPath,
+        to: outputPath,
+      });
+
+      // Clean up the temp file
+      try {
+        await window.__TAURI__.core.invoke("remove_file", { path: tempOutputPath });
+      } catch (e) {
+        // Temp file cleanup failure is non-critical
+        console.warn("Failed to clean up temp file:", e);
+      }
 
       // Step 4: Transition document status to finalized
       await invoke("finalize_document", {

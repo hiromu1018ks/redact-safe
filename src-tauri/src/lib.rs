@@ -1018,7 +1018,7 @@ fn detect_names(
 fn finalize_masking_pdf(
     state: State<WorkerState>,
     doc_state: State<DocumentState>,
-    pdf_data_base64: String,
+    pdf_path: String,
     dpi: Option<u32>,
     margin_pt: Option<f64>,
     password: Option<String>,
@@ -1058,7 +1058,7 @@ fn finalize_masking_pdf(
         .ok_or("Python worker not initialized")?;
 
     let params = serde_json::json!({
-        "pdf_data": pdf_data_base64,
+        "pdf_path": pdf_path,
         "pages": pages_info,
         "dpi": dpi.unwrap_or(300),
         "margin_pt": margin_pt.unwrap_or(3.0),
@@ -1066,6 +1066,7 @@ fn finalize_masking_pdf(
     });
 
     let result = worker.call("finalize_masking", Some(params))?;
+
     Ok(result)
 }
 
@@ -1128,26 +1129,54 @@ fn generate_output_filename(
 }
 
 /// Read a file and return its contents as a base64-encoded string.
+/// Limited to 100MB to prevent excessive memory usage.
 #[tauri::command]
 fn read_file_as_base64(path: String) -> Result<String, String> {
     use std::fs;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
+
+    const MAX_SIZE: u64 = 100 * 1024 * 1024; // 100MB
+    let metadata = fs::metadata(&path).map_err(|e| format!("Failed to read metadata '{}': {}", path, e))?;
+    if metadata.len() > MAX_SIZE {
+        return Err(format!("File too large ({} bytes, max {} bytes)", metadata.len(), MAX_SIZE));
+    }
 
     let bytes = fs::read(&path).map_err(|e| format!("Failed to read file '{}': {}", path, e))?;
     Ok(BASE64_STANDARD.encode(&bytes))
 }
 
 /// Save base64-encoded data to a file.
+/// Limited to 100MB of decoded data.
 #[tauri::command]
 fn save_base64_to_file(path: String, data: String) -> Result<(), String> {
     use std::fs;
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
+    const MAX_SIZE: usize = 100 * 1024 * 1024; // 100MB
     let bytes = BASE64_STANDARD
         .decode(&data)
         .map_err(|e| format!("Failed to decode base64 data: {}", e))?;
+    if bytes.len() > MAX_SIZE {
+        return Err(format!("Data too large ({} bytes, max {} bytes)", bytes.len(), MAX_SIZE));
+    }
     fs::write(&path, &bytes)
         .map_err(|e| format!("Failed to write file '{}': {}", path, e))?;
+    Ok(())
+}
+
+/// Copy a file from one path to another.
+#[tauri::command]
+fn copy_file(from: String, to: String) -> Result<(), String> {
+    std::fs::copy(&from, &to)
+        .map_err(|e| format!("Failed to copy '{}': {}", from, e))?;
+    Ok(())
+}
+
+/// Remove a file (used for temp file cleanup).
+#[tauri::command]
+fn remove_file(path: String) -> Result<(), String> {
+    std::fs::remove_file(&path)
+        .map_err(|e| format!("Failed to remove '{}': {}", path, e))?;
     Ok(())
 }
 
@@ -1217,6 +1246,8 @@ pub fn run() {
             generate_output_filename,
             read_file_as_base64,
             save_base64_to_file,
+            copy_file,
+            remove_file,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

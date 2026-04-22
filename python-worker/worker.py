@@ -613,7 +613,8 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
 
     Args:
         params: {
-            pdf_data: base64-encoded source PDF,
+            pdf_path: path to source PDF file (preferred for large files),
+            pdf_data: base64-encoded source PDF (fallback),
             pages: [{page_num, width_pt, height_pt, rotation_deg, regions: [{bbox, enabled}]}],
             dpi: rasterization DPI (default 300),
             margin_pt: bbox margin in PDF points (default 3),
@@ -622,24 +623,30 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
         request_id: for progress reporting
 
     Returns:
-        {pdf_data: base64-encoded finalized PDF, pages_processed: int, regions_masked: int}
+        {output_path: path to finalized PDF temp file, pages_processed: int, regions_masked: int}
     """
     import fitz
     from PIL import Image, ImageDraw
 
+    pdf_path = params.get("pdf_path", "")
     pdf_data_b64 = params.get("pdf_data", "")
     pages_info = params.get("pages", [])
     dpi = params.get("dpi", 300)
     margin_pt = params.get("margin_pt", 3)
     password = params.get("password", "")
 
-    if not pdf_data_b64:
-        raise ValueError("pdf_data is required")
+    if not pdf_path and not pdf_data_b64:
+        raise ValueError("pdf_path or pdf_data is required")
+
     if not pages_info:
         raise ValueError("pages is required")
 
-    pdf_bytes = base64.b64decode(pdf_data_b64)
-    src_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    # Open PDF from file path (preferred) or base64 data
+    if pdf_path and os.path.isfile(pdf_path):
+        src_doc = fitz.open(pdf_path)
+    else:
+        pdf_bytes = base64.b64decode(pdf_data_b64)
+        src_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     if src_doc.is_encrypted and src_doc.needs_pass:
         if not src_doc.authenticate(password):
@@ -828,10 +835,20 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
             error_detail = "; ".join(all_issues[:10])  # Limit to first 10 issues
             raise ValueError(f"VERIFICATION_FAILED: {error_detail}")
 
-        result_pdf_b64 = base64.b64encode(out_bytes).decode("ascii")
+        # Step 8: Write verified output to a managed temp file (caller will copy and we'll clean up)
+        out_fd, out_path = create_managed_temp_file(suffix=".pdf")
+        os.close(out_fd)
+        try:
+            with open(out_path, "wb") as f:
+                f.write(out_bytes)
+        except Exception:
+            secure_delete_file(out_path)
+            if out_path in _managed_temp_files:
+                _managed_temp_files.remove(out_path)
+            raise
 
         return {
-            "pdf_data": result_pdf_b64,
+            "output_path": out_path,
             "pages_processed": total_pages,
             "regions_masked": total_regions_masked,
             "sanitization": sanitize_result,

@@ -107,7 +107,7 @@ v1と同じ（変更なし）
       "handle_extract_text_digitalでpdf_pathが渡された場合にbase64エンコードをスキップするように修正",
       "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "performance",
