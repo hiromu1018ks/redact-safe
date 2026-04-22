@@ -561,6 +561,53 @@ let currentPdfPassword = "";  // Store password for encrypted PDFs
 let currentSourceFilePath = "";  // Store source PDF file path
 
 // ============================================================
+// Focus Trap Utility (for modal dialogs)
+// ============================================================
+
+/**
+ * Trap keyboard focus within a container element.
+ * Returns a cleanup function that removes the trap.
+ */
+function trapFocus(container) {
+  const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const focusableElements = () => container.querySelectorAll(focusableSelector);
+
+  function handleTabKey(e) {
+    if (e.key !== "Tab") return;
+
+    const elements = focusableElements();
+    if (elements.length === 0) return;
+
+    const first = elements[0];
+    const last = elements[elements.length - 1];
+
+    if (e.shiftKey) {
+      if (document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }
+
+  container.addEventListener("keydown", handleTabKey);
+  return () => container.removeEventListener("keydown", handleTabKey);
+}
+
+/**
+ * Update aria-expanded on menu triggers when menus open/close.
+ */
+function updateMenuAriaExpanded(menuTrigger, expanded) {
+  if (menuTrigger) {
+    menuTrigger.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+}
+
+// ============================================================
 // Interaction Engine (drag / resize / draw-new)
 // ============================================================
 
@@ -1155,7 +1202,9 @@ let activeMenu = null;
 function closeAllMenus() {
   menuDropdowns.forEach((dropdown) => {
     dropdown.querySelector(".menu-popup").classList.remove("open");
-    dropdown.querySelector(".menu-trigger").classList.remove("active");
+    const trigger = dropdown.querySelector(".menu-trigger");
+    trigger.classList.remove("active");
+    updateMenuAriaExpanded(trigger, false);
   });
   activeMenu = null;
 }
@@ -1172,6 +1221,7 @@ menuDropdowns.forEach((dropdown) => {
       closeAllMenus();
       popup.classList.add("open");
       trigger.classList.add("active");
+      updateMenuAriaExpanded(trigger, true);
       activeMenu = dropdown;
     }
   });
@@ -1182,6 +1232,7 @@ menuDropdowns.forEach((dropdown) => {
       closeAllMenus();
       popup.classList.add("open");
       trigger.classList.add("active");
+      updateMenuAriaExpanded(trigger, true);
       activeMenu = dropdown;
     }
   });
@@ -1508,11 +1559,14 @@ async function showOperatorDialog(title, message) {
 function showFinalizerWarningDialog() {
   return new Promise((resolve) => {
     finalizerWarningDialog.style.display = "flex";
+    btnFinalizerWarningCancel.focus();
+    trapFocus(finalizerWarningDialog);
 
     function cleanup() {
       finalizerWarningDialog.style.display = "none";
       btnFinalizerWarningProceed.removeEventListener("click", onProceed);
       btnFinalizerWarningCancel.removeEventListener("click", onCancel);
+      finalizerWarningDialog.removeEventListener("keydown", onKeydown);
     }
 
     function onProceed() {
@@ -1525,8 +1579,17 @@ function showFinalizerWarningDialog() {
       resolve(false);
     }
 
+    function onKeydown(e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+      }
+    }
+
     btnFinalizerWarningProceed.addEventListener("click", onProceed);
     btnFinalizerWarningCancel.addEventListener("click", onCancel);
+    finalizerWarningDialog.addEventListener("keydown", onKeydown);
   });
 }
 
@@ -1580,11 +1643,14 @@ function showPasswordError() {
 function showSignatureDialog() {
   return new Promise((resolve) => {
     signatureDialog.style.display = "flex";
+    btnSignatureCancel.focus();
+    trapFocus(signatureDialog);
 
     function cleanup() {
       signatureDialog.style.display = "none";
       btnSignatureContinue.removeEventListener("click", onContinue);
       btnSignatureCancel.removeEventListener("click", onCancel);
+      signatureDialog.removeEventListener("keydown", onKeydown);
     }
 
     function onContinue() {
@@ -1597,8 +1663,17 @@ function showSignatureDialog() {
       resolve(false);
     }
 
+    function onKeydown(e) {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+      }
+    }
+
     btnSignatureContinue.addEventListener("click", onContinue);
     btnSignatureCancel.addEventListener("click", onCancel);
+    signatureDialog.addEventListener("keydown", onKeydown);
   });
 }
 

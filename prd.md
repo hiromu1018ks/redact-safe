@@ -273,7 +273,7 @@ v1と同じ（変更なし）
       "アイコンのみのボタン（+、-、<<、>>）にaria-labelを追加",
       "npm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "ux",
