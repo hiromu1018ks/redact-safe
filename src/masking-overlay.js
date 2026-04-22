@@ -76,12 +76,28 @@ export class MaskingOverlay {
 
   /**
    * Set the hovered region (for hover highlighting).
+   * Uses dirty-region optimization: only redraws the previously hovered
+   * and newly hovered regions instead of the full canvas.
    * @param {string|null} regionId
    */
   setHoveredRegion(regionId) {
     if (this._hoveredRegionId === regionId) return;
+
+    const prevHoveredId = this._hoveredRegionId;
     this._hoveredRegionId = regionId;
-    this.render();
+
+    // Dirty-region: only redraw the affected regions
+    if (prevHoveredId || regionId) {
+      const dirtyIds = new Set();
+      if (prevHoveredId) dirtyIds.add(prevHoveredId);
+      if (regionId) dirtyIds.add(regionId);
+
+      for (const r of this.regions) {
+        if (dirtyIds.has(r.id)) {
+          this._drawRegionDirty(r);
+        }
+      }
+    }
   }
 
   /**
@@ -109,22 +125,32 @@ export class MaskingOverlay {
     const canvasX = (clientX - rect.left) * (this.canvas.width / rect.width);
     const canvasY = (clientY - rect.top) * (this.canvas.height / rect.height);
 
-    const hs = MaskingOverlay.HANDLE_SIZE;
-    const threshold = hs + 3; // slightly larger hit area
+    const cornerThreshold = 8; // larger hit area for corners
+    const edgeThreshold = 5;   // smaller hit area for edges
 
-    const handles = {
+    const cornerHandles = {
       nw: [bbox.x, bbox.y],
-      n:  [bbox.x + bbox.width / 2, bbox.y],
       ne: [bbox.x + bbox.width, bbox.y],
-      e:  [bbox.x + bbox.width, bbox.y + bbox.height / 2],
       se: [bbox.x + bbox.width, bbox.y + bbox.height],
-      s:  [bbox.x + bbox.width / 2, bbox.y + bbox.height],
       sw: [bbox.x, bbox.y + bbox.height],
+    };
+
+    // Check corners first (larger hit area takes priority)
+    for (const [id, [hx, hy]] of Object.entries(cornerHandles)) {
+      if (Math.abs(canvasX - hx) <= cornerThreshold && Math.abs(canvasY - hy) <= cornerThreshold) {
+        return id;
+      }
+    }
+
+    const edgeHandles = {
+      n:  [bbox.x + bbox.width / 2, bbox.y],
+      e:  [bbox.x + bbox.width, bbox.y + bbox.height / 2],
+      s:  [bbox.x + bbox.width / 2, bbox.y + bbox.height],
       w:  [bbox.x, bbox.y + bbox.height / 2],
     };
 
-    for (const [id, [hx, hy]] of Object.entries(handles)) {
-      if (Math.abs(canvasX - hx) <= threshold && Math.abs(canvasY - hy) <= threshold) {
+    for (const [id, [hx, hy]] of Object.entries(edgeHandles)) {
+      if (Math.abs(canvasX - hx) <= edgeThreshold && Math.abs(canvasY - hy) <= edgeThreshold) {
         return id;
       }
     }
@@ -180,6 +206,25 @@ export class MaskingOverlay {
   // ----------------------------------------------------------------
   // Rendering
   // ----------------------------------------------------------------
+
+  /**
+   * Clear and redraw only the bounding-box area of a single region
+   * (dirty-region optimization for hover changes).
+   */
+  _drawRegionDirty(region) {
+    const bbox = this.pdfViewer.getBBoxInCanvas(region.bbox);
+    if (!bbox || bbox.width <= 0 || bbox.height <= 0) return;
+
+    // Expand clear area to include border and largest handles (corners = 8px)
+    const pad = 8;
+    const x0 = Math.max(0, bbox.x - pad);
+    const y0 = Math.max(0, bbox.y - pad);
+    const x1 = Math.min(this.canvas.width, bbox.x + bbox.width + pad);
+    const y1 = Math.min(this.canvas.height, bbox.y + bbox.height + pad);
+
+    this.ctx.clearRect(x0, y0, x1 - x0, y1 - y0);
+    this._drawRegion(region);
+  }
 
   render() {
     const ctx = this.ctx;
@@ -237,12 +282,14 @@ export class MaskingOverlay {
 
   _drawSelectionHandles(bbox) {
     const ctx = this.ctx;
-    const size = 6;
+    const cornerSize = 8;
+    const edgeSize = 4;
 
     ctx.fillStyle = "#FF0000";
     ctx.strokeStyle = "#FFFFFF";
     ctx.lineWidth = 1;
 
+    // Corner handles — large squares
     const corners = [
       [bbox.x, bbox.y],
       [bbox.x + bbox.width, bbox.y],
@@ -251,13 +298,13 @@ export class MaskingOverlay {
     ];
 
     for (const [cx, cy] of corners) {
-      const hx = cx - size / 2;
-      const hy = cy - size / 2;
-      ctx.fillRect(hx, hy, size, size);
-      ctx.strokeRect(hx, hy, size, size);
+      const hx = cx - cornerSize / 2;
+      const hy = cy - cornerSize / 2;
+      ctx.fillRect(hx, hy, cornerSize, cornerSize);
+      ctx.strokeRect(hx, hy, cornerSize, cornerSize);
     }
 
-    // Edge midpoints for resize
+    // Edge midpoint handles — small squares (visually distinct from corners)
     const midpoints = [
       [bbox.x + bbox.width / 2, bbox.y],
       [bbox.x + bbox.width, bbox.y + bbox.height / 2],
@@ -266,10 +313,10 @@ export class MaskingOverlay {
     ];
 
     for (const [cx, cy] of midpoints) {
-      const hx = cx - size / 2;
-      const hy = cy - size / 2;
-      ctx.fillRect(hx, hy, size, size);
-      ctx.strokeRect(hx, hy, size, size);
+      const hx = cx - edgeSize / 2;
+      const hy = cy - edgeSize / 2;
+      ctx.fillRect(hx, hy, edgeSize, edgeSize);
+      ctx.strokeRect(hx, hy, edgeSize, edgeSize);
     }
   }
 }

@@ -90,6 +90,13 @@ export class PdfViewer {
 
   async renderPage(pageNum) {
     if (!this.pdfDoc) return;
+
+    // Cancel any in-progress rendering
+    if (this.rendering && this._currentRenderTask) {
+      this._currentRenderTask.cancel();
+      this._currentRenderTask = null;
+    }
+
     if (this.rendering) {
       this.pendingPage = pageNum;
       return;
@@ -114,7 +121,16 @@ export class PdfViewer {
         viewport: viewport,
       };
 
-      await page.render(renderContext).promise;
+      const renderTask = page.render(renderContext);
+      this._currentRenderTask = renderTask;
+      try {
+        await renderTask.promise;
+      } catch (e) {
+        // Ignore cancellation errors
+        if (e && e.name === "RenderingCancelledException") return;
+        throw e;
+      }
+      this._currentRenderTask = null;
       this.currentPage = pageNum;
 
       if (this.onPageChange) {
@@ -122,6 +138,7 @@ export class PdfViewer {
       }
     } finally {
       this.rendering = false;
+      this._currentRenderTask = null;
       if (this.pendingPage !== null) {
         const next = this.pendingPage;
         this.pendingPage = null;
@@ -168,7 +185,22 @@ export class PdfViewer {
 
   fitToWidth(containerWidth) {
     if (!this.pdfDoc || !this._pageWidthPt) return;
-    this.setZoom(containerWidth / this._pageWidthPt);
+    // Subtract estimated scrollbar width (~17px) to avoid horizontal overflow
+    const scrollbarWidth = this._estimateScrollbarWidth();
+    const availableWidth = containerWidth - scrollbarWidth;
+    if (availableWidth <= 0) return;
+    this.setZoom(availableWidth / this._pageWidthPt);
+  }
+
+  /**
+   * Estimate scrollbar width by measuring the container element.
+   * Falls back to 17px if measurement is not possible.
+   */
+  _estimateScrollbarWidth() {
+    if (!this.canvas.parentElement) return 17;
+    const parent = this.canvas.parentElement;
+    if (parent.clientHeight >= parent.scrollHeight) return 0;
+    return parent.offsetWidth - parent.clientWidth || 17;
   }
 
   /**

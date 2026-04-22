@@ -327,7 +327,7 @@ v1と同じ（変更なし）
       "handle hit detectionでコーナーハンドルとエッジハンドルを視覚的に区別（コーナーは大きく、エッジは小さく）",
       "npm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "ux",
