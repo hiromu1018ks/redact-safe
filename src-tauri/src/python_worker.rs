@@ -196,11 +196,24 @@ impl PythonWorker {
         ))
     }
 
-    /// Send a JSON-RPC request and wait for the response
+    /// Send a JSON-RPC request and wait for the response with timeout.
+    /// Default timeout is 5 minutes; use `call_with_timeout` for custom timeout.
     pub fn call(
         &mut self,
         method: &str,
         params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        self.call_with_timeout(method, params, std::time::Duration::from_secs(300))
+    }
+
+    /// Send a JSON-RPC request and wait for the response with a custom timeout.
+    /// If the worker doesn't respond within the timeout, the process is killed
+    /// via system command and an error is returned.
+    pub fn call_with_timeout(
+        &mut self,
+        method: &str,
+        params: Option<serde_json::Value>,
+        timeout: std::time::Duration,
     ) -> Result<serde_json::Value, String> {
         let id = self.next_id;
         self.next_id += 1;
@@ -226,13 +239,57 @@ impl PythonWorker {
             .flush()
             .map_err(|e| format!("Failed to flush stdin: {}", e))?;
 
-        // Read response from stdout
+        // Spawn a watchdog thread that kills the process on timeout.
+        // This unblocks the read_line below with an I/O error.
+        let child_pid = self.child.id();
+        let method_name = method.to_string();
+        let stop_flag = self.stderr_stop.clone();
+        let watchdog = std::thread::Builder::new()
+            .name("worker-call-watchdog".to_string())
+            .spawn(move || {
+                std::thread::sleep(timeout);
+                // Signal stderr reader to stop
+                stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                log::error!("Worker call '{}' timed out after {:?}", method_name, timeout);
+                // Kill the process via system command (works cross-platform for our needs)
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = Command::new("taskkill")
+                        .args(["/F", "/PID", &child_pid.to_string()])
+                        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = Command::new("kill")
+                        .arg("-9")
+                        .arg(child_pid.to_string())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn();
+                }
+            })
+            .map_err(|e| format!("Failed to spawn watchdog thread: {}", e))?;
+
+        // Read response from stdout (blocks until response or process death)
         let stdout = self.child.stdout.as_mut().ok_or("Worker stdout not available")?;
         let mut reader = std::io::BufReader::new(stdout);
         let mut response_line = String::new();
-        reader
-            .read_line(&mut response_line)
-            .map_err(|e| format!("Failed to read from stdout: {}", e))?;
+
+        let read_result = reader.read_line(&mut response_line);
+
+        // Read completed (or failed), drop the watchdog to cancel it
+        drop(watchdog);
+
+        read_result.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::BrokenPipe || e.kind() == std::io::ErrorKind::UnexpectedEof {
+                format!("Worker call '{}' failed: process was killed (likely timed out)", method)
+            } else {
+                format!("Failed to read from stdout: {}", e)
+            }
+        })?;
 
         let response: JsonRpcResponse = serde_json::from_str(response_line.trim())
             .map_err(|e| format!("Failed to parse response: {} (raw: {})", e, response_line))?;

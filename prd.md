@@ -168,7 +168,7 @@ v1と同じ（変更なし）
       "WorkerStateのMutexが長時間のOCR/確定処理中にcancel_workerをブロックしないように、call()を別スレッドで実行する方式を検討",
       "cargo test、cargo clippyが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "stability",

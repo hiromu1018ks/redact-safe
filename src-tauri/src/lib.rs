@@ -42,11 +42,22 @@ fn worker_call(
     method: &str,
     params: Option<serde_json::Value>,
 ) -> Result<serde_json::Value, String> {
+    worker_call_with_timeout(state, app_handle, method, params, std::time::Duration::from_secs(300))
+}
+
+/// Call a Python worker method with auto-restart and custom timeout.
+fn worker_call_with_timeout(
+    state: &State<WorkerState>,
+    app_handle: &tauri::AppHandle,
+    method: &str,
+    params: Option<serde_json::Value>,
+    timeout: std::time::Duration,
+) -> Result<serde_json::Value, String> {
     let mut guard = ensure_worker_alive(state, app_handle)?;
     let worker = guard
         .as_mut()
         .ok_or("Python worker not initialized")?;
-    worker.call(method, params)
+    worker.call_with_timeout(method, params, timeout)
 }
 
 struct AuditState(Mutex<AuditLogger>);
@@ -1020,7 +1031,7 @@ fn finalize_masking_pdf(
         "password": password.unwrap_or_default(),
     });
 
-    worker_call(&state, &app_handle, "finalize_masking", Some(params))
+    worker_call_with_timeout(&state, &app_handle, "finalize_masking", Some(params), std::time::Duration::from_secs(600))
 }
 
 /// Verify that a finalized PDF is safe (no text, no hidden data) via Python worker.
