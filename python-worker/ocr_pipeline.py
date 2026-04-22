@@ -301,8 +301,36 @@ def run_ocr_pipeline(
     if progress_callback:
         progress_callback("text_recognition", 1, 3, "文字認識中...")
 
+    # Step 1.5: Identify image/figure layout regions for manual masking
+    image_layout_bboxes = []
+    manual_mask_regions = []
+    if layout_regions:
+        for lr in layout_regions:
+            if lr.get("type") in ("figure", "image", "picture"):
+                image_layout_bboxes.append(lr.get("bbox_px", []))
+
     # Step 2: PaddleOCR text recognition
     text_regions = recognize_text_paddleocr(doc, page_num, dpi, page_image=page_image)
+
+    # Filter out text regions that fall within image/figure layout regions
+    # and mark image regions for manual masking review
+    if image_layout_bboxes:
+        filtered_regions = []
+        for region in text_regions:
+            region_bbox = region.get("bbox_px", [])
+            if len(region_bbox) == 4:
+                is_inside_image = False
+                for img_bbox in image_layout_bboxes:
+                    if len(img_bbox) == 4 and _bboxes_overlap(
+                        region_bbox, img_bbox, threshold=0.5
+                    ):
+                        is_inside_image = True
+                        break
+                if not is_inside_image:
+                    filtered_regions.append(region)
+            else:
+                filtered_regions.append(region)
+        text_regions = filtered_regions
 
     # Convert pixel bboxes to PDF point coordinates [x, y, width, height]
     page = doc[page_num]
@@ -317,6 +345,26 @@ def run_ocr_pipeline(
                 round(w * scale, 2),
                 round(h * scale, 2),
             ]
+
+    # Create manual masking regions for image/figure areas (now that scale is available)
+    if image_layout_bboxes:
+        for img_bbox in image_layout_bboxes:
+            if len(img_bbox) == 4:
+                x, y, w, h = img_bbox
+                manual_mask_regions.append({
+                    "bbox_px": img_bbox,
+                    "bbox_pt": [
+                        round(x * scale, 2),
+                        round(y * scale, 2),
+                        round(w * scale, 2),
+                        round(h * scale, 2),
+                    ],
+                    "type": "image_region",
+                    "text": "",
+                    "confidence": 0.0,
+                    "source": "layout_analysis",
+                    "note": "画像・図領域 - 手動マスキング確認が必要",
+                })
 
     if progress_callback:
         progress_callback("tesseract_check", 2, 3, "低信頼度領域を確認中...")
@@ -365,6 +413,7 @@ def run_ocr_pipeline(
         "page": page_num + 1,
         "layout_regions": layout_regions,
         "text_regions": text_regions,
+        "manual_mask_regions": manual_mask_regions,
         "tesseract_used": len(tesseract_regions) > 0,
         "tesseract_available": _check_tesseract(),
         "dpi": dpi,
