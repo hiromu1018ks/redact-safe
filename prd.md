@@ -354,7 +354,7 @@ v1と同じ（変更なし）
       "サイドバーの折りたたみ・展開が正しく動作することを確認",
       "cargo test、cargo clippy、npm run buildが全て通ることを確認"
     ],
-    "passes": false
+    "passes": true
   }
 ]
 ```
