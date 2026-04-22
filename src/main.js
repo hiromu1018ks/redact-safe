@@ -1,262 +1,25 @@
 import { PdfViewer } from "./pdf-viewer.js";
 import { MaskingOverlay } from "./masking-overlay.js";
 import { UndoManager } from "./undo-manager.js";
+import { appState, isTauri, invoke, generateId, logAuditEvent, autoSaveDocument } from "./ui/app-state.js";
+import { showToast } from "./ui/toast.js";
+import { renderSidebar, updateSidebarRegions } from "./ui/sidebar.js";
+import { closeAllMenus, isMenuOpen } from "./ui/menu.js";
+import {
+  trapFocus,
+  showPasswordDialog, showPasswordError, showSignatureDialog,
+  showOperatorDialog, showFinalizerWarningDialog,
+  showSettingsDialog, hideSettingsDialog, isSettingsDialogOpen,
+  showHelpDialog, hideHelpDialog, isHelpDialogOpen,
+} from "./ui/dialogs.js";
 
 // ============================================================
-// PII Type Labels (Japanese)
+// Wire cross-module function references into appState
 // ============================================================
 
-const PII_TYPE_LABELS = {
-  name: "氏名",
-  address: "住所",
-  phone: "電話番号",
-  email: "メールアドレス",
-  birth_date: "生年月日",
-  my_number: "マイナンバー",
-  corporate_number: "法人番号",
-  custom: "カスタム",
-};
-
-/**
- * Get a display label for a PII type.
- * Falls back to the raw type string for unknown types.
- */
-function piiTypeLabel(type) {
-  return PII_TYPE_LABELS[type] || type;
-}
-
-// --- Tauri API (safe access for browser fallback) ---
-const isTauri = !!window.__TAURI__;
-
-function invoke(cmd, args) {
-  if (!isTauri) return Promise.reject(new Error("Not running in Tauri"));
-  return window.__TAURI__.core.invoke(cmd, args);
-}
-
-// Generate a simple UUID-like ID
-function generateId() {
-  return "r-" + Math.random().toString(36).substring(2, 10);
-}
-
-// ============================================================
-// Sidebar Manager
-// ============================================================
-
-const sidebarPlaceholder = document.getElementById("sidebar-placeholder");
-const sidebarContent = document.getElementById("sidebar-content");
-const regionCountSpan = document.getElementById("region-count");
-const regionListEl = document.getElementById("region-list");
-const filterTypeSelect = document.getElementById("filter-type");
-const filterStatusSelect = document.getElementById("filter-status");
-const btnSidebarAllOn = document.getElementById("btn-sidebar-all-on");
-const btnSidebarAllOff = document.getElementById("btn-sidebar-all-off");
-const sidebar = document.getElementById("sidebar");
-const btnSidebarToggle = document.getElementById("btn-sidebar-toggle");
-const btnSidebarExpand = document.getElementById("btn-sidebar-expand");
-
-// Sidebar collapse/expand
-if (btnSidebarToggle && sidebar && btnSidebarExpand) {
-  btnSidebarToggle.addEventListener("click", () => {
-    sidebar.classList.add("collapsed");
-    btnSidebarExpand.style.display = "block";
-  });
-  btnSidebarExpand.addEventListener("click", () => {
-    sidebar.classList.remove("collapsed");
-    btnSidebarExpand.style.display = "none";
-  });
-}
-
-/** All regions across all pages (fetched from backend or test regions) */
-let allRegionsByPage = {}; // { pageNum: [regions...] }
-
-/** Test regions for browser/debug mode */
-let testRegions = [];
-
-/** Currently active filter state */
-let sidebarFilter = { type: "all", status: "all" };
-
-/**
- * Update the sidebar with all regions from backend or test data.
- */
-async function updateSidebarRegions() {
-  if (isTauri) {
-    try {
-      const doc = await invoke("get_document");
-      if (!doc || !doc.pages) {
-        allRegionsByPage = {};
-        renderSidebar();
-        return;
-      }
-      allRegionsByPage = {};
-      for (const page of doc.pages) {
-        if (page.regions && page.regions.length > 0) {
-          allRegionsByPage[page.page] = page.regions;
-        }
-      }
-    } catch (e) {
-      allRegionsByPage = {};
-    }
-  } else {
-    // Browser mode: group test regions by page
-    if (testRegions.length > 0) {
-      allRegionsByPage = { [pdfViewer.currentPage]: testRegions };
-    } else {
-      allRegionsByPage = {};
-    }
-  }
-  renderSidebar();
-}
-
-/**
- * Render the sidebar region list based on current filter state.
- */
-function renderSidebar() {
-  const allRegions = Object.entries(allRegionsByPage).flatMap(([page, regions]) =>
-    regions.map((r) => ({ ...r, _page: parseInt(page, 10) }))
-  );
-
-  const total = allRegions.length;
-  regionCountSpan.textContent = total + "件";
-
-  if (total === 0) {
-    sidebarPlaceholder.style.display = "flex";
-    sidebarContent.style.display = "none";
-    return;
-  }
-
-  sidebarPlaceholder.style.display = "none";
-  sidebarContent.style.display = "flex";
-
-  // Apply filters
-  const filtered = allRegions.filter((r) => {
-    if (sidebarFilter.type !== "all" && r.type !== sidebarFilter.type) return false;
-    if (sidebarFilter.status === "enabled" && !r.enabled) return false;
-    if (sidebarFilter.status === "disabled" && r.enabled) return false;
-    return true;
-  });
-
-  // Sort by page, then by position (y then x)
-  filtered.sort((a, b) => {
-    if (a._page !== b._page) return a._page - b._page;
-    if (a.bbox[1] !== b.bbox[1]) return a.bbox[1] - b.bbox[1];
-    return a.bbox[0] - b.bbox[0];
-  });
-
-  // Render list
-  regionListEl.innerHTML = "";
-  if (filtered.length === 0) {
-    regionListEl.innerHTML = '<div class="region-list-empty">条件に一致する項目がありません</div>';
-    return;
-  }
-
-  for (const region of filtered) {
-    const item = document.createElement("div");
-    item.className = "region-item";
-    if (maskingOverlay && region.id === maskingOverlay.selectedRegionId) {
-      item.classList.add("selected");
-    }
-    item.dataset.regionId = region.id;
-    item.dataset.pageNum = region._page;
-
-    const iconClass = region.enabled ? "icon-on" : "icon-off";
-    const typeClass = "type-" + (region.type || "custom");
-    const sourceTag = region.source === "manual" ? " [手動]" : "";
-    const confidenceStr = region.confidence ? ` (${(region.confidence * 100).toFixed(0)}%)` : "";
-
-    item.innerHTML = `
-      <div class="region-icon ${iconClass}">${region.enabled ? "ON" : "OFF"}</div>
-      <div class="region-info">
-        <div class="region-type ${typeClass}">${piiTypeLabel(region.type)}${sourceTag}</div>
-        <div class="region-meta">P${region._page} · ${confidenceStr}</div>
-      </div>
-    `;
-
-    item.addEventListener("click", () => onSidebarRegionClick(region));
-    regionListEl.appendChild(item);
-  }
-
-  // Enable/disable bulk buttons
-  const hasRegions = total > 0;
-  btnSidebarAllOn.disabled = !hasRegions;
-  btnSidebarAllOff.disabled = !hasRegions;
-}
-
-/**
- * Handle click on a sidebar region item.
- * Navigate to the page and select/highlight the region.
- */
-async function onSidebarRegionClick(region) {
-  const pageNum = region._page;
-
-  // Navigate to the correct page if needed
-  if (pdfViewer.isLoaded && pdfViewer.currentPage !== pageNum) {
-    await pdfViewer.goToPage(pageNum);
-  }
-
-  // Wait a bit for the page to render, then select the region
-  setTimeout(() => {
-    if (maskingOverlay) {
-      maskingOverlay.setSelectedRegion(region.id);
-      renderSidebar(); // Update selection highlight in sidebar
-    }
-  }, 200);
-}
-
-// Filter change handlers
-filterTypeSelect.addEventListener("change", () => {
-  sidebarFilter.type = filterTypeSelect.value;
-  renderSidebar();
-});
-
-filterStatusSelect.addEventListener("change", () => {
-  sidebarFilter.status = filterStatusSelect.value;
-  renderSidebar();
-});
-
-// Sidebar bulk ON/OFF buttons
-btnSidebarAllOn.addEventListener("click", async () => {
-  if (!isTauri) {
-    testRegions.forEach((r) => (r.enabled = true));
-    maskingOverlay.setRegions(testRegions);
-    await updateSidebarRegions();
-    logAuditEvent("all_regions_enabled", null, { count: testRegions.length });
-    return;
-  }
-  try {
-    undoManager.beginMacro("全てON");
-    const count = await invoke("set_all_regions_enabled", { pageNum: null, enabled: true });
-    undoManager.endMacro();
-    await refreshOverlay();
-    await updateSidebarRegions();
-    logAuditEvent("all_regions_enabled", null, { count });
-    await autoSaveDocument();
-  } catch (e) {
-    undoManager.endMacro();
-    console.error("Failed to enable all regions:", e);
-  }
-});
-
-btnSidebarAllOff.addEventListener("click", async () => {
-  if (!isTauri) {
-    testRegions.forEach((r) => (r.enabled = false));
-    maskingOverlay.setRegions(testRegions);
-    await updateSidebarRegions();
-    logAuditEvent("all_regions_disabled", null, { count: testRegions.length });
-    return;
-  }
-  try {
-    undoManager.beginMacro("全てOFF");
-    const count = await invoke("set_all_regions_enabled", { pageNum: null, enabled: false });
-    undoManager.endMacro();
-    await refreshOverlay();
-    await updateSidebarRegions();
-    logAuditEvent("all_regions_disabled", null, { count });
-    await autoSaveDocument();
-  } catch (e) {
-    undoManager.endMacro();
-    console.error("Failed to disable all regions:", e);
-  }
-});
+appState.openPdfFile = openPdfFile; // forward reference, set below
+appState.showSettingsDialog = showSettingsDialog;
+appState.showHelpDialog = showHelpDialog;
 
 // ============================================================
 // Watermark Manager
@@ -264,13 +27,8 @@ btnSidebarAllOff.addEventListener("click", async () => {
 
 const watermarkEl = document.getElementById("watermark");
 
-/**
- * Update watermark visibility based on document status.
- * Shows watermark in draft/confirmed state, hides in finalized state.
- */
 async function updateWatermark() {
   if (!isTauri) {
-    // In browser mode, show watermark by default (always draft)
     watermarkEl.style.display = "flex";
     return;
   }
@@ -283,14 +41,9 @@ async function updateWatermark() {
       watermarkEl.style.display = "none";
     }
   } catch {
-    // No document loaded - hide watermark
     watermarkEl.style.display = "none";
   }
 }
-
-// ============================================================
-// Progress Manager
-// ============================================================
 
 // ============================================================
 // Document Status Manager
@@ -302,16 +55,11 @@ const STATUS_LABELS = {
   finalized: "確定済み",
 };
 
-/** Current document status (cached in frontend) */
-let currentDocStatus = null; // null = no document, "draft" | "confirmed" | "finalized"
+let currentDocStatus = null;
 
 const docStatusManager = {
-  /**
-   * Fetch document status from backend and update all UI accordingly.
-   */
   async refresh() {
     if (!isTauri) {
-      // Browser mode: always draft
       currentDocStatus = "draft";
     } else {
       try {
@@ -323,37 +71,30 @@ const docStatusManager = {
     this.updateUI();
   },
 
-  /** Get current status string (or null) */
   getStatus() {
     return currentDocStatus;
   },
 
-  /** Whether editing operations are allowed (only in draft) */
   isEditable() {
     return currentDocStatus === "draft";
   },
 
-  /** Whether the document can be confirmed (only from draft) */
   canConfirm() {
     return currentDocStatus === "draft";
   },
 
-  /** Whether the document can be rolled back (only from confirmed) */
   canRollback() {
     return currentDocStatus === "confirmed";
   },
 
-  /** Whether the document can be finalized (only from confirmed) */
   canFinalize() {
     return currentDocStatus === "confirmed";
   },
 
-  /**
-   * Update all UI elements based on current document status.
-   */
   updateUI() {
     const status = currentDocStatus;
     const hasDoc = !!status;
+    const { maskingOverlay, pdfViewer } = appState;
 
     // --- Status display badge ---
     if (status) {
@@ -363,40 +104,39 @@ const docStatusManager = {
       statusDisplay.textContent = "未読込";
     }
 
-    // --- Confirm button (visible/enabled only in draft with document) ---
+    // --- Confirm button ---
     const btnConfirm = document.getElementById("btn-confirm");
     if (btnConfirm) {
       btnConfirm.style.display = hasDoc ? "" : "none";
       btnConfirm.disabled = !this.canConfirm();
     }
 
-    // --- Rollback button (visible/enabled only in confirmed) ---
+    // --- Rollback button ---
     const btnRollback = document.getElementById("btn-rollback");
     if (btnRollback) {
       btnRollback.style.display = this.canRollback() ? "" : "none";
       btnRollback.disabled = !this.canRollback();
     }
 
-    // --- Finalize button (enabled only in confirmed) ---
+    // --- Finalize button ---
     const btnFinalize = document.getElementById("btn-finalize");
     if (btnFinalize) {
       btnFinalize.disabled = !this.canFinalize();
     }
 
-    // --- Editing controls (disabled in confirmed/finalized) ---
+    // --- Editing controls ---
     const editable = this.isEditable();
 
-    // Sidebar bulk buttons
-    btnSidebarAllOn.disabled = !editable || !hasDoc;
-    btnSidebarAllOff.disabled = !editable || !hasDoc;
+    const btnSidebarAllOn = document.getElementById("btn-sidebar-all-on");
+    const btnSidebarAllOff = document.getElementById("btn-sidebar-all-off");
+    if (btnSidebarAllOn) btnSidebarAllOn.disabled = !editable || !hasDoc;
+    if (btnSidebarAllOff) btnSidebarAllOff.disabled = !editable || !hasDoc;
 
-    // Toolbar bulk buttons
     const btnToolbarAllOn = document.getElementById("btn-toolbar-all-on");
     const btnToolbarAllOff = document.getElementById("btn-toolbar-all-off");
     if (btnToolbarAllOn) btnToolbarAllOn.disabled = !editable || !hasDoc;
     if (btnToolbarAllOff) btnToolbarAllOff.disabled = !editable || !hasDoc;
 
-    // Overlay interaction
     if (maskingOverlay) {
       if (editable) {
         overlayCanvas.classList.remove("interaction-disabled");
@@ -405,7 +145,6 @@ const docStatusManager = {
       }
     }
 
-    // Warning banner visibility — only show in draft/confirmed when document is loaded
     const warningBanner = document.getElementById("warning-banner");
     if (warningBanner) {
       if (status === "draft" || status === "confirmed") {
@@ -415,7 +154,6 @@ const docStatusManager = {
       }
     }
 
-    // --- Mode display ---
     if (modeDisplay) {
       if (!status) {
         modeDisplay.textContent = "";
@@ -432,7 +170,6 @@ const docStatusManager = {
       }
     }
 
-    // --- Status bar ---
     if (statusBarText) {
       if (status) {
         statusBarText.textContent = pdfViewer.fileName
@@ -454,6 +191,10 @@ const docStatusManager = {
   },
 };
 
+// ============================================================
+// Progress Manager
+// ============================================================
+
 const progressContainer = document.getElementById("progress-container");
 const progressBarFill = document.getElementById("progress-bar-fill");
 const progressMessage = document.getElementById("progress-message");
@@ -468,7 +209,6 @@ const progressManager = {
   _cancelUnlisten: null,
   _cancelledUnlisten: null,
 
-  /** Show the progress bar and start listening for events */
   show() {
     this._active = true;
     this._lastUpdate = Date.now();
@@ -480,10 +220,8 @@ const progressManager = {
     progressStaleWarning.style.display = "none";
     btnCancelProgress.disabled = false;
 
-    // Start stale detection timer (check every 2 seconds)
     this._staleTimer = setInterval(() => this._checkStale(), 2000);
 
-    // Listen for worker progress events
     if (isTauri && !this._cancelUnlisten) {
       this._cancelUnlisten = window.__TAURI__.event.listen("worker-progress", (event) => {
         this.update(event.payload);
@@ -494,31 +232,24 @@ const progressManager = {
     }
   },
 
-  /** Update progress from a worker-progress event */
   update(payload) {
     if (!this._active) return;
-
     this._lastUpdate = Date.now();
     progressStaleWarning.style.display = "none";
 
     const { phase, current, total, message } = payload;
-
-    // Update message
     progressMessage.textContent = message || phase;
 
-    // Update bar
     if (total > 0) {
       const pct = Math.min(Math.round((current / total) * 100), 100);
       progressBarFill.style.width = pct + "%";
       progressPercent.textContent = pct + "%";
     } else {
-      // Unknown total - show indeterminate
       progressBarFill.classList.add("indeterminate");
       progressPercent.textContent = "";
     }
   },
 
-  /** Hide the progress bar */
   hide() {
     this._active = false;
     progressContainer.style.display = "none";
@@ -529,7 +260,6 @@ const progressManager = {
     }
   },
 
-  /** Check if progress is stale (>10 seconds without update) */
   _checkStale() {
     if (!this._active) return;
     const elapsed = Date.now() - this._lastUpdate;
@@ -538,12 +268,10 @@ const progressManager = {
     }
   },
 
-  /** Whether progress UI is currently active */
   get isActive() {
     return this._active;
   },
 
-  /** Clean up event listeners */
   cleanup() {
     if (this._cancelUnlisten) {
       this._cancelUnlisten.then((fn) => fn());
@@ -556,7 +284,6 @@ const progressManager = {
   },
 };
 
-// Cancel button handler
 btnCancelProgress.addEventListener("click", async () => {
   btnCancelProgress.disabled = true;
   progressMessage.textContent = "キャンセル中...";
@@ -568,84 +295,10 @@ btnCancelProgress.addEventListener("click", async () => {
   progressManager.hide();
 });
 
-// --- Toast Notifications ---
-const TOAST_TYPES = { error: "error", warning: "warning", info: "info" };
-
-function showToast(message, type = "error") {
-  const container = document.getElementById("toast-container");
-  if (!container) return;
-
-  const toast = document.createElement("div");
-  toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  toast.setAttribute("role", "alert");
-  toast.setAttribute("aria-live", "assertive");
-
-  container.appendChild(toast);
-
-  // Trigger slide-in animation
-  requestAnimationFrame(() => toast.classList.add("toast-visible"));
-
-  // Auto-dismiss after 3 seconds
-  setTimeout(() => {
-    toast.classList.remove("toast-visible");
-    toast.addEventListener("transitionend", () => toast.remove(), { once: true });
-  }, 3000);
-}
-
 // --- PDF Viewer ---
 let pdfViewer = null;
 let maskingOverlay = null;
 let undoManager = new UndoManager();
-let currentPdfPassword = "";  // Store password for encrypted PDFs
-let currentSourceFilePath = "";  // Store source PDF file path
-
-// ============================================================
-// Focus Trap Utility (for modal dialogs)
-// ============================================================
-
-/**
- * Trap keyboard focus within a container element.
- * Returns a cleanup function that removes the trap.
- */
-function trapFocus(container) {
-  const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-  const focusableElements = () => container.querySelectorAll(focusableSelector);
-
-  function handleTabKey(e) {
-    if (e.key !== "Tab") return;
-
-    const elements = focusableElements();
-    if (elements.length === 0) return;
-
-    const first = elements[0];
-    const last = elements[elements.length - 1];
-
-    if (e.shiftKey) {
-      if (document.activeElement === first) {
-        e.preventDefault();
-        last.focus();
-      }
-    } else {
-      if (document.activeElement === last) {
-        e.preventDefault();
-        first.focus();
-      }
-    }
-  }
-
-  container.addEventListener("keydown", handleTabKey);
-  return () => container.removeEventListener("keydown", handleTabKey);
-}
-
-/**
- * Update aria-expanded on menu triggers when menus open/close.
- */
-function updateMenuAriaExpanded(menuTrigger, expanded) {
-  if (menuTrigger) {
-    menuTrigger.setAttribute("aria-expanded", expanded ? "true" : "false");
-  }
-}
 
 // ============================================================
 // Interaction Engine (drag / resize / draw-new)
@@ -658,7 +311,6 @@ const InteractionMode = {
   DRAW_NEW: "draw_new",
 };
 
-/** @type {{ mode: string, handleId: string|null, regionId: string|null, startClientX: number, startClientY: number, startBbox: number[]|null, currentBbox: number[]|null }} */
 let interaction = {
   mode: InteractionMode.NONE,
   handleId: null,
@@ -669,13 +321,8 @@ let interaction = {
   currentBbox: null,
 };
 
-/** Minimum size in PDF points for a drawn region */
 const MIN_REGION_SIZE_PT = 5;
 
-/**
- * Get the region object from local test regions or backend document.
- * Returns null if not found.
- */
 async function getRegion(pageNum, regionId) {
   if (isTauri) {
     try {
@@ -688,14 +335,9 @@ async function getRegion(pageNum, regionId) {
       return null;
     }
   }
-  // Browser mode: check local testRegions
-  return testRegions.find((r) => r.id === regionId) || null;
+  return appState.testRegions.find((r) => r.id === regionId) || null;
 }
 
-/**
- * Persist a region update to the backend (Tauri mode).
- * In browser mode, updates local testRegions array.
- */
 async function persistRegionUpdate(pageNum, regionId, updates) {
   if (isTauri) {
     try {
@@ -709,7 +351,7 @@ async function persistRegionUpdate(pageNum, regionId, updates) {
       console.error("Failed to persist region update:", e);
     }
   } else {
-    const r = testRegions.find((tr) => tr.id === regionId);
+    const r = appState.testRegions.find((tr) => tr.id === regionId);
     if (r) {
       if (updates.bbox) r.bbox = updates.bbox;
       if (updates.enabled !== undefined) r.enabled = updates.enabled;
@@ -717,9 +359,6 @@ async function persistRegionUpdate(pageNum, regionId, updates) {
   }
 }
 
-/**
- * Add a region to backend (Tauri) or local test array (browser).
- */
 async function persistAddRegion(pageNum, region) {
   if (isTauri) {
     try {
@@ -728,13 +367,10 @@ async function persistAddRegion(pageNum, region) {
       console.error("Failed to add region:", e);
     }
   } else {
-    testRegions.push(region);
+    appState.testRegions.push(region);
   }
 }
 
-/**
- * Remove a region from backend (Tauri) or local test array (browser).
- */
 async function persistRemoveRegion(pageNum, regionId) {
   if (isTauri) {
     try {
@@ -743,15 +379,11 @@ async function persistRemoveRegion(pageNum, regionId) {
       console.error("Failed to remove region:", e);
     }
   } else {
-    const idx = testRegions.findIndex((r) => r.id === regionId);
-    if (idx !== -1) testRegions.splice(idx, 1);
+    const idx = appState.testRegions.findIndex((r) => r.id === regionId);
+    if (idx !== -1) appState.testRegions.splice(idx, 1);
   }
 }
 
-/**
- * Toggle region ON/OFF via backend.
- * Returns the new enabled state.
- */
 async function persistToggleRegion(pageNum, regionId) {
   if (isTauri) {
     try {
@@ -761,7 +393,7 @@ async function persistToggleRegion(pageNum, regionId) {
       return null;
     }
   } else {
-    const r = testRegions.find((tr) => tr.id === regionId);
+    const r = appState.testRegions.find((tr) => tr.id === regionId);
     if (r) {
       r.enabled = !r.enabled;
       return r.enabled;
@@ -770,10 +402,8 @@ async function persistToggleRegion(pageNum, regionId) {
   }
 }
 
-/**
- * Refresh overlay regions from backend or local array.
- */
 async function refreshOverlay() {
+  const { maskingOverlay, pdfViewer, testRegions } = appState;
   if (!maskingOverlay) return;
   if (isTauri) {
     await fetchAndDisplayRegions(pdfViewer.currentPage);
@@ -782,37 +412,13 @@ async function refreshOverlay() {
   }
 }
 
-/**
- * Log an audit event (Tauri only).
- */
-function logAuditEvent(event, documentId, data) {
-  if (!isTauri) return;
-  invoke("log_event", { event, user: null, documentId, data }).catch(() => {});
-}
-
-/**
- * Auto-save document (Tauri only).
- * Uses the tracked auto-save path managed by the Rust backend.
- */
-async function autoSaveDocument() {
-  if (!isTauri) return;
-  try {
-    await invoke("auto_save_document");
-  } catch {
-    // Auto-save is best-effort; document may not have a path yet
-  }
-}
-
-/**
- * Start the periodic auto-save timer (every 30 seconds).
- */
 let autoSaveTimer = null;
 
 function startAutoSaveTimer() {
   stopAutoSaveTimer();
   autoSaveTimer = setInterval(() => {
     autoSaveDocument();
-  }, 30000); // 30 seconds
+  }, 30000);
 }
 
 function stopAutoSaveTimer() {
@@ -822,18 +428,14 @@ function stopAutoSaveTimer() {
   }
 }
 
-/**
- * Handle mousedown on the overlay canvas — start interaction.
- */
 function onOverlayMouseDown(e) {
   if (!maskingOverlay || !pdfViewer.isLoaded) return;
-  if (e.button !== 0) return; // left click only
-  if (!docStatusManager.isEditable()) return; // Block editing in non-draft state
+  if (e.button !== 0) return;
+  if (!docStatusManager.isEditable()) return;
 
   const clientX = e.clientX;
   const clientY = e.clientY;
 
-  // 1. Check if clicking a resize handle of the selected region
   const handleId = maskingOverlay.findHandleAtPoint(clientX, clientY);
   if (handleId) {
     const region = maskingOverlay.regions.find((r) => r.id === maskingOverlay.selectedRegionId);
@@ -850,11 +452,10 @@ function onOverlayMouseDown(e) {
     }
   }
 
-  // 2. Check if clicking on a region
   const region = maskingOverlay.findRegionAtPoint(clientX, clientY);
   if (region) {
     maskingOverlay.setSelectedRegion(region.id);
-    renderSidebar(); // Update sidebar selection highlight
+    renderSidebar();
     interaction.mode = InteractionMode.MOVE;
     interaction.handleId = null;
     interaction.regionId = region.id;
@@ -866,9 +467,8 @@ function onOverlayMouseDown(e) {
     return;
   }
 
-  // 3. Clicked on empty space → deselect and start drawing new region
   maskingOverlay.setSelectedRegion(null);
-  renderSidebar(); // Update sidebar selection highlight
+  renderSidebar();
   interaction.mode = InteractionMode.DRAW_NEW;
   interaction.handleId = null;
   interaction.regionId = null;
@@ -879,9 +479,6 @@ function onOverlayMouseDown(e) {
   e.preventDefault();
 }
 
-/**
- * Handle mousemove during an active interaction.
- */
 function onOverlayMouseMove(e) {
   if (!maskingOverlay || !pdfViewer.isLoaded) return;
 
@@ -889,7 +486,6 @@ function onOverlayMouseMove(e) {
   const clientY = e.clientY;
 
   if (interaction.mode === InteractionMode.NONE) {
-    // Update cursor based on what's under the mouse (only if editable)
     if (docStatusManager.isEditable()) {
       const handleId = maskingOverlay.findHandleAtPoint(clientX, clientY);
       if (handleId) {
@@ -907,7 +503,6 @@ function onOverlayMouseMove(e) {
   e.preventDefault();
 
   if (interaction.mode === InteractionMode.MOVE) {
-    // Calculate delta in PDF points
     const startPt = pdfViewer.screenToPdfPoint(interaction.startClientX, interaction.startClientY);
     const currentPt = pdfViewer.screenToPdfPoint(clientX, clientY);
     const dx = currentPt.x - startPt.x;
@@ -921,7 +516,6 @@ function onOverlayMouseMove(e) {
     ];
     interaction.currentBbox = newBbox;
 
-    // Update region in overlay
     const region = maskingOverlay.regions.find((r) => r.id === interaction.regionId);
     if (region) {
       region.bbox = newBbox;
@@ -937,13 +531,11 @@ function onOverlayMouseMove(e) {
     let newX = sb[0], newY = sb[1], newW = sb[2], newH = sb[3];
     const hid = interaction.handleId;
 
-    // Adjust x, y, w, h based on which handle is being dragged
     if (hid === "nw" || hid === "w" || hid === "sw") { newX += dx; newW -= dx; }
     if (hid === "ne" || hid === "e" || hid === "se") { newW += dx; }
     if (hid === "nw" || hid === "n" || hid === "ne") { newY += dy; newH -= dy; }
     if (hid === "sw" || hid === "s" || hid === "se") { newH += dy; }
 
-    // Enforce minimum size
     if (newW < MIN_REGION_SIZE_PT) {
       if (hid === "nw" || hid === "w" || hid === "sw") {
         newX = sb[0] + sb[2] - MIN_REGION_SIZE_PT;
@@ -966,7 +558,6 @@ function onOverlayMouseMove(e) {
       maskingOverlay.render();
     }
   } else if (interaction.mode === InteractionMode.DRAW_NEW) {
-    // Draw a preview rectangle on the overlay
     const startPt = pdfViewer.screenToPdfPoint(interaction.startClientX, interaction.startClientY);
     const currentPt = pdfViewer.screenToPdfPoint(clientX, clientY);
 
@@ -976,19 +567,13 @@ function onOverlayMouseMove(e) {
     const h = Math.abs(currentPt.y - startPt.y);
 
     interaction.currentBbox = [x, y, w, h];
-
-    // Render a preview by temporarily adding a "drawing" region
     _drawNewRegionPreview(x, y, w, h);
   }
 }
 
-/**
- * Render a preview rectangle for the region being drawn.
- */
 function _drawNewRegionPreview(x, y, w, h) {
   if (!maskingOverlay) return;
   const ctx = maskingOverlay.ctx;
-  // Re-render existing regions first
   maskingOverlay.render();
   if (w < 1 || h < 1) return;
 
@@ -1003,9 +588,6 @@ function _drawNewRegionPreview(x, y, w, h) {
   ctx.restore();
 }
 
-/**
- * Handle mouseup — finalize the interaction.
- */
 async function onOverlayMouseUp(e) {
   if (interaction.mode === InteractionMode.NONE) return;
 
@@ -1017,14 +599,12 @@ async function onOverlayMouseUp(e) {
         interaction.currentBbox[0] !== interaction.startBbox[0] ||
         interaction.currentBbox[1] !== interaction.startBbox[1];
       if (changed) {
-        // Push undo
         undoManager.push({
           type: "move",
           pageNum,
           regionId: interaction.regionId,
           prevBbox: interaction.startBbox,
         });
-        // Persist
         await persistRegionUpdate(pageNum, interaction.regionId, {
           bbox: interaction.currentBbox,
         });
@@ -1096,11 +676,9 @@ async function onOverlayMouseUp(e) {
         await updateSidebarRegions();
       }
     }
-    // Clear preview and refresh
     await refreshOverlay();
   }
 
-  // Reset interaction
   interaction.mode = InteractionMode.NONE;
   interaction.handleId = null;
   interaction.regionId = null;
@@ -1108,15 +686,11 @@ async function onOverlayMouseUp(e) {
   interaction.currentBbox = null;
 }
 
-/**
- * Perform undo of the last operation.
- */
 async function performUndo() {
   if (!docStatusManager.isEditable()) return;
   const op = undoManager.pop();
   if (!op) return;
 
-  // Handle macro undo (batch of operations)
   if (op.type === "macro") {
     for (const macroOp of op.ops) {
       await undoSingleOp(macroOp);
@@ -1131,13 +705,9 @@ async function performUndo() {
   await updateSidebarRegions();
 }
 
-/**
- * Undo a single operation, navigating to the correct page if needed.
- */
 async function undoSingleOp(op) {
   const pageNum = op.pageNum;
 
-  // Navigate to the correct page if the operation was on a different page
   if (pdfViewer.isLoaded && pdfViewer.currentPage !== pageNum) {
     await pdfViewer.goToPage(pageNum);
   }
@@ -1173,9 +743,6 @@ async function undoSingleOp(op) {
   }
 }
 
-/**
- * Delete the currently selected region.
- */
 async function deleteSelectedRegion() {
   if (!maskingOverlay || !maskingOverlay.selectedRegionId) return;
   if (!docStatusManager.isEditable()) return;
@@ -1183,7 +750,6 @@ async function deleteSelectedRegion() {
   const regionId = maskingOverlay.selectedRegionId;
   const pageNum = pdfViewer.currentPage;
 
-  // Get region snapshot for undo
   const region = await getRegion(pageNum, regionId);
   if (!region) return;
 
@@ -1205,9 +771,6 @@ async function deleteSelectedRegion() {
   await updateSidebarRegions();
 }
 
-/**
- * Toggle the currently selected region ON/OFF.
- */
 async function toggleSelectedRegion() {
   if (!maskingOverlay || !maskingOverlay.selectedRegionId) return;
   if (!docStatusManager.isEditable()) return;
@@ -1233,85 +796,9 @@ async function toggleSelectedRegion() {
 }
 
 // ============================================================
-// Menu Bar (Dropdown Menus)
+// DOM Elements
 // ============================================================
 
-const menuDropdowns = document.querySelectorAll(".menu-dropdown");
-let activeMenu = null;
-
-function closeAllMenus() {
-  menuDropdowns.forEach((dropdown) => {
-    dropdown.querySelector(".menu-popup").classList.remove("open");
-    const trigger = dropdown.querySelector(".menu-trigger");
-    trigger.classList.remove("active");
-    updateMenuAriaExpanded(trigger, false);
-  });
-  activeMenu = null;
-}
-
-menuDropdowns.forEach((dropdown) => {
-  const trigger = dropdown.querySelector(".menu-trigger");
-  const popup = dropdown.querySelector(".menu-popup");
-
-  trigger.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (activeMenu === dropdown) {
-      closeAllMenus();
-    } else {
-      closeAllMenus();
-      popup.classList.add("open");
-      trigger.classList.add("active");
-      updateMenuAriaExpanded(trigger, true);
-      activeMenu = dropdown;
-    }
-  });
-
-  // Hover to switch menus when one is already open
-  dropdown.addEventListener("mouseenter", () => {
-    if (activeMenu && activeMenu !== dropdown) {
-      closeAllMenus();
-      popup.classList.add("open");
-      trigger.classList.add("active");
-      updateMenuAriaExpanded(trigger, true);
-      activeMenu = dropdown;
-    }
-  });
-});
-
-// Close menus on click outside
-document.addEventListener("click", (e) => {
-  if (!e.target.closest(".menu-dropdown")) {
-    closeAllMenus();
-  }
-});
-
-// Close menus on Escape
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && activeMenu) {
-    closeAllMenus();
-    e.stopPropagation();
-  }
-});
-
-// Menu item actions
-document.getElementById("menu-item-open").addEventListener("click", () => {
-  closeAllMenus();
-  if (!docStatusManager.getStatus()) {
-    openPdfFile();
-  }
-});
-
-document.getElementById("menu-item-settings").addEventListener("click", () => {
-  closeAllMenus();
-  showSettingsDialog();
-});
-
-document.getElementById("menu-item-shortcuts").addEventListener("click", () => {
-  closeAllMenus();
-  showHelpDialog();
-});
-
-// --- DOM Elements ---
 const pdfCanvas = document.getElementById("pdf-canvas");
 const overlayCanvas = document.getElementById("overlay-canvas");
 const canvasWrapper = document.getElementById("canvas-wrapper");
@@ -1334,7 +821,6 @@ const btnFitWidth = document.getElementById("btn-fit-width");
 const btnPrevPage = document.getElementById("btn-prev-page");
 const btnNextPage = document.getElementById("btn-next-page");
 
-// --- Debug Panel ---
 const debugPanel = document.getElementById("debug-panel");
 const btnCloseDebug = document.getElementById("btn-close-debug");
 
@@ -1346,33 +832,35 @@ function initPdfViewer() {
   pdfViewer = new PdfViewer(pdfCanvas);
   maskingOverlay = new MaskingOverlay(overlayCanvas, pdfViewer);
 
+  // Store references in shared state
+  appState.pdfViewer = pdfViewer;
+  appState.maskingOverlay = maskingOverlay;
+  appState.undoManager = undoManager;
+  appState.docStatusManager = docStatusManager;
+  appState.progressManager = progressManager;
+  appState.fetchAndDisplayRegions = fetchAndDisplayRegions;
+
   pdfViewer.onLoad = ({ numPages, fileName }) => {
-    // Show canvas wrapper, hide placeholder
     canvasWrapper.classList.add("visible");
     pdfPlaceholder.classList.add("hidden");
     pdfContainer.classList.add("has-pdf");
 
-    // Update filename
     pdfFilename.textContent = fileName;
     pdfFilename.title = fileName;
 
-    // Update total pages
     totalPagesSpan.textContent = numPages;
     pageInput.max = numPages;
     pageInput.value = 1;
     pageInput.disabled = false;
 
-    // Enable navigation buttons
     btnPrevPage.disabled = false;
     btnNextPage.disabled = numPages <= 1;
     btnZoomIn.disabled = false;
     btnZoomOut.disabled = false;
     btnFitWidth.disabled = false;
 
-    // Update status
     updateStatus(fileName, 1, numPages);
 
-    // Log file_opened event (Tauri only)
     if (isTauri) {
       invoke("log_event", {
         event: "file_opened",
@@ -1381,7 +869,6 @@ function initPdfViewer() {
         data: { file_name: fileName, num_pages: numPages },
       }).catch(() => {});
 
-      // Also try to get the document_id for logging
       invoke("get_document_status").then((status) => {
         if (status) {
           invoke("get_document").then((doc) => {
@@ -1402,17 +889,14 @@ function initPdfViewer() {
       }).catch(() => {});
     }
 
-    // Update sidebar and watermark
     updateSidebarRegions();
     updateWatermark();
     docStatusManager.refresh();
 
-    // Start periodic auto-save timer
     startAutoSaveTimer();
 
-    // Auto fit to width
     requestAnimationFrame(() => {
-      const containerWidth = pdfContainer.clientWidth - 32; // padding
+      const containerWidth = pdfContainer.clientWidth - 32;
       if (containerWidth > 0) {
         pdfViewer.fitToWidth(containerWidth);
       }
@@ -1425,12 +909,10 @@ function initPdfViewer() {
     btnNextPage.disabled = pageNum >= totalPages;
     updateStatus(pdfViewer.fileName, pageNum, totalPages);
 
-    // Sync overlay canvas size with PDF canvas
     if (maskingOverlay) {
       maskingOverlay.resize(pdfCanvas.width, pdfCanvas.height);
     }
 
-    // Fetch regions for the new page from backend
     fetchAndDisplayRegions(pageNum);
   };
 
@@ -1439,9 +921,6 @@ function initPdfViewer() {
   };
 }
 
-/**
- * Fetch regions for a page from the backend and display them on the overlay.
- */
 async function fetchAndDisplayRegions(pageNum) {
   if (!isTauri || !maskingOverlay) return;
   try {
@@ -1456,8 +935,8 @@ async function fetchAndDisplayRegions(pageNum) {
     } else {
       maskingOverlay.clear();
     }
-    // Update sidebar with all regions from all pages
-    allRegionsByPage = {};
+    const { allRegionsByPage } = appState;
+    for (const key of Object.keys(allRegionsByPage)) delete allRegionsByPage[key];
     for (const p of doc.pages) {
       if (p.regions && p.regions.length > 0) {
         allRegionsByPage[p.page] = p.regions;
@@ -1465,7 +944,6 @@ async function fetchAndDisplayRegions(pageNum) {
     }
     renderSidebar();
   } catch (e) {
-    // No document or error - clear overlay
     maskingOverlay?.clear();
   }
 }
@@ -1478,246 +956,10 @@ function updateStatus(fileName, pageNum, totalPages) {
   statusDisplay.textContent = `${fileName} — ${pageNum} / ${totalPages}ページ`;
 }
 
-function enablePdfControls(enabled) {
-  btnZoomIn.disabled = !enabled;
-  btnZoomOut.disabled = !enabled;
-  btnFitWidth.disabled = !enabled;
-  btnPrevPage.disabled = !enabled;
-  btnNextPage.disabled = !enabled;
-  pageInput.disabled = !enabled;
-}
-
 // ============================================================
-// File Opening
+// Utility Functions
 // ============================================================
 
-// --- Modal Dialog Helpers ---
-const passwordDialog = document.getElementById("password-dialog");
-const passwordInput = document.getElementById("pdf-password-input");
-const passwordError = document.getElementById("password-error");
-const btnPasswordOk = document.getElementById("btn-password-ok");
-const btnPasswordCancel = document.getElementById("btn-password-cancel");
-
-const signatureDialog = document.getElementById("signature-dialog");
-const btnSignatureContinue = document.getElementById("btn-signature-continue");
-const btnSignatureCancel = document.getElementById("btn-signature-cancel");
-
-const operatorDialog = document.getElementById("operator-dialog");
-const operatorDialogTitle = document.getElementById("operator-dialog-title");
-const operatorDialogMessage = document.getElementById("operator-dialog-message");
-const operatorDialogOsUsername = document.getElementById("operator-dialog-os-username");
-const operatorDisplayName = document.getElementById("operator-display-name");
-const btnOperatorOk = document.getElementById("btn-operator-ok");
-const btnOperatorCancel = document.getElementById("btn-operator-cancel");
-
-const finalizerWarningDialog = document.getElementById("finalizer-warning-dialog");
-const btnFinalizerWarningProceed = document.getElementById("btn-finalizer-warning-proceed");
-const btnFinalizerWarningCancel = document.getElementById("btn-finalizer-warning-cancel");
-
-/** Cached OS username */
-let cachedOsUsername = null;
-
-/**
- * Get the OS login username from the backend (cached after first call).
- */
-async function getOsUsername() {
-  if (cachedOsUsername) return cachedOsUsername;
-  if (!isTauri) return "browser_user";
-  try {
-    cachedOsUsername = await invoke("get_os_username");
-    return cachedOsUsername;
-  } catch {
-    return "unknown";
-  }
-}
-
-/**
- * Show operator name input dialog.
- * Pre-fills the display name with the OS username.
- * @param {string} title - Dialog title
- * @param {string} message - Dialog message
- * @returns {Promise<{osUsername: string, displayName: string}|null>} - Operator info or null if cancelled
- */
-async function showOperatorDialog(title, message) {
-  const osUsername = await getOsUsername();
-
-  return new Promise((resolve) => {
-    operatorDialogTitle.textContent = title;
-    operatorDialogMessage.textContent = message;
-    operatorDialogOsUsername.textContent = osUsername;
-    operatorDisplayName.value = osUsername;
-    operatorDialog.style.display = "flex";
-
-    // Focus the display name input after a short delay
-    setTimeout(() => {
-      operatorDisplayName.focus();
-      operatorDisplayName.select();
-    }, 50);
-
-    function cleanup() {
-      operatorDialog.style.display = "none";
-      btnOperatorOk.removeEventListener("click", onOk);
-      btnOperatorCancel.removeEventListener("click", onCancel);
-      operatorDisplayName.removeEventListener("keydown", onKeydown);
-    }
-
-    function onOk() {
-      const displayName = operatorDisplayName.value.trim();
-      if (!displayName) {
-        operatorDisplayName.focus();
-        return;
-      }
-      cleanup();
-      resolve({ osUsername, displayName });
-    }
-
-    function onCancel() {
-      cleanup();
-      resolve(null);
-    }
-
-    function onKeydown(e) {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        onOk();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        onCancel();
-      }
-    }
-
-    btnOperatorOk.addEventListener("click", onOk);
-    btnOperatorCancel.addEventListener("click", onCancel);
-    operatorDisplayName.addEventListener("keydown", onKeydown);
-  });
-}
-
-/**
- * Show finalizer/creator match warning dialog.
- * @returns {Promise<boolean>} - true if user wants to proceed, false to cancel
- */
-function showFinalizerWarningDialog() {
-  return new Promise((resolve) => {
-    finalizerWarningDialog.style.display = "flex";
-    btnFinalizerWarningCancel.focus();
-    trapFocus(finalizerWarningDialog);
-
-    function cleanup() {
-      finalizerWarningDialog.style.display = "none";
-      btnFinalizerWarningProceed.removeEventListener("click", onProceed);
-      btnFinalizerWarningCancel.removeEventListener("click", onCancel);
-      finalizerWarningDialog.removeEventListener("keydown", onKeydown);
-    }
-
-    function onProceed() {
-      cleanup();
-      resolve(true);
-    }
-
-    function onCancel() {
-      cleanup();
-      resolve(false);
-    }
-
-    function onKeydown(e) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        onCancel();
-      }
-    }
-
-    btnFinalizerWarningProceed.addEventListener("click", onProceed);
-    btnFinalizerWarningCancel.addEventListener("click", onCancel);
-    finalizerWarningDialog.addEventListener("keydown", onKeydown);
-  });
-}
-
-function showPasswordDialog() {
-  return new Promise((resolve) => {
-    passwordInput.value = "";
-    passwordError.style.display = "none";
-    passwordDialog.style.display = "flex";
-    passwordInput.focus();
-
-    function cleanup() {
-      passwordDialog.style.display = "none";
-      btnPasswordOk.removeEventListener("click", onOk);
-      btnPasswordCancel.removeEventListener("click", onCancel);
-      passwordInput.removeEventListener("keydown", onKeydown);
-    }
-
-    function onOk() {
-      const pw = passwordInput.value;
-      cleanup();
-      resolve(pw);
-    }
-
-    function onCancel() {
-      cleanup();
-      resolve(null);
-    }
-
-    function onKeydown(e) {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        onOk();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        onCancel();
-      }
-    }
-
-    btnPasswordOk.addEventListener("click", onOk);
-    btnPasswordCancel.addEventListener("click", onCancel);
-    passwordInput.addEventListener("keydown", onKeydown);
-  });
-}
-
-function showPasswordError() {
-  passwordError.style.display = "block";
-  passwordInput.value = "";
-  passwordInput.focus();
-}
-
-function showSignatureDialog() {
-  return new Promise((resolve) => {
-    signatureDialog.style.display = "flex";
-    btnSignatureCancel.focus();
-    trapFocus(signatureDialog);
-
-    function cleanup() {
-      signatureDialog.style.display = "none";
-      btnSignatureContinue.removeEventListener("click", onContinue);
-      btnSignatureCancel.removeEventListener("click", onCancel);
-      signatureDialog.removeEventListener("keydown", onKeydown);
-    }
-
-    function onContinue() {
-      cleanup();
-      resolve(true);
-    }
-
-    function onCancel() {
-      cleanup();
-      resolve(false);
-    }
-
-    function onKeydown(e) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        onCancel();
-      }
-    }
-
-    btnSignatureContinue.addEventListener("click", onContinue);
-    btnSignatureCancel.addEventListener("click", onCancel);
-    signatureDialog.addEventListener("keydown", onKeydown);
-  });
-}
-
-// --- Array buffer to base64 ---
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -1727,10 +969,6 @@ function arrayBufferToBase64(buffer) {
   return btoa(binary);
 }
 
-/**
- * Generate default output path for a finalized safe PDF.
- * Format: <original_dir>/<original_name>_redacted_<YYYYMMDD_HHMMSS>.pdf
- */
 function generateOutputPath(sourceFilePath) {
   if (!sourceFilePath) return "document_redacted.pdf";
   const lastSlash = Math.max(sourceFilePath.lastIndexOf("/"), sourceFilePath.lastIndexOf("\\"));
@@ -1744,16 +982,10 @@ function generateOutputPath(sourceFilePath) {
   return `${dir}${baseName}_redacted_${timestamp}.pdf`;
 }
 
-// --- PDF Analysis Flow ---
+// ============================================================
+// PDF Analysis Flow
+// ============================================================
 
-/**
- * Invoke a worker command with progress tracking.
- * Shows progress bar, handles stale detection, and supports cancellation.
- * @param {string} cmd - Tauri command name
- * @param {object} args - Command arguments
- * @param {string} [startMessage] - Initial progress message
- * @returns {Promise<any>} - Command result
- */
 async function invokeWithProgress(cmd, args, startMessage) {
   progressManager.show();
   if (startMessage) {
@@ -1769,11 +1001,9 @@ async function invokeWithProgress(cmd, args, startMessage) {
 
 async function analyzePdfWithWorker(pdfData) {
   if (!isTauri) {
-    // Browser mode: no Python worker, skip analysis
     return null;
   }
   try {
-    // Ensure Python worker is initialized
     try {
       const workerResult = await invoke("init_worker");
       console.log("Python worker initialized:", workerResult);
@@ -1785,10 +1015,9 @@ async function analyzePdfWithWorker(pdfData) {
     progressManager.show();
     progressManager.update({ phase: "analyzing", current: 0, total: 1, message: "PDFを解析中..." });
 
-    // Prefer file path over base64 to avoid huge data transfer
     let invokeParams;
-    if (currentSourceFilePath) {
-      invokeParams = { filePath: currentSourceFilePath, password: null };
+    if (appState.currentSourceFilePath) {
+      invokeParams = { filePath: appState.currentSourceFilePath, password: null };
     } else {
       invokeParams = { pdfDataBase64: arrayBufferToBase64(pdfData), password: null };
     }
@@ -1819,26 +1048,20 @@ async function decryptPdfWithWorker(pdfData, password) {
   }
 }
 
-// --- Main PDF Load Flow ---
 async function loadPdfWithAnalysis(arrayBuffer, fileName) {
-  // Clear undo history when loading a new PDF
   undoManager.clear();
 
-  // Step 1: Analyze PDF via Python worker (if available)
   const analysis = await analyzePdfWithWorker(arrayBuffer);
 
   if (analysis) {
-    // Step 2: Check encryption
     if (analysis.needs_pass) {
-      // Show password dialog (loop until correct or cancel)
       while (true) {
         const password = await showPasswordDialog();
         if (password === null) {
-          // User cancelled
           return;
         }
 
-        currentPdfPassword = password || "";
+        appState.currentPdfPassword = password || "";
         const decryptResult = await decryptPdfWithWorker(arrayBuffer, password);
         if (decryptResult && decryptResult.success) {
           break;
@@ -1848,7 +1071,6 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
       }
     }
 
-    // Step 3: Check for digital signatures
     if (analysis.has_signatures) {
       const proceed = await showSignatureDialog();
       if (!proceed) {
@@ -1856,10 +1078,9 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
       }
     }
 
-    // Step 4: Create document state with hash
     if (analysis.sha256) {
       try {
-        const osUsername = await getOsUsername();
+        const osUsername = await invoke("get_os_username");
         const docId = await invoke("create_document", {
           sourceFile: fileName,
           sourceHash: `sha256:${analysis.sha256}`,
@@ -1868,7 +1089,6 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
         });
         console.log("Document created:", docId);
 
-        // Add pages from analysis
         if (analysis.pages && Array.isArray(analysis.pages)) {
           for (const pageInfo of analysis.pages) {
             try {
@@ -1890,7 +1110,6 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
     }
   }
 
-  // Step 5: Load PDF into viewer
   try {
     await pdfViewer.loadPdf(arrayBuffer, fileName);
   } catch (e) {
@@ -1899,16 +1118,11 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
     return;
   }
 
-  // Step 6: Run PII detection pipeline (Tauri only)
   if (isTauri && analysis && analysis.page_count > 0) {
-    await runPiiDetection(arrayBuffer, analysis.page_count, currentPdfPassword);
+    await runPiiDetection(arrayBuffer, analysis.page_count, appState.currentPdfPassword);
   }
 }
 
-/**
- * Run PII detection on all pages of the loaded PDF.
- * Extracts text, detects PII, and registers detected regions in the document state.
- */
 async function runPiiDetection(arrayBuffer, pageCount, password) {
   let totalDetections = 0;
 
@@ -1930,11 +1144,10 @@ async function runPiiDetection(arrayBuffer, pageCount, password) {
           message: "個人情報を検出中... (" + (pageIdx + 1) + "/" + pageCount + "ページ)",
         });
 
-        // Prefer file path over base64 to avoid huge data transfer
         let invokeParams;
-        if (currentSourceFilePath) {
+        if (appState.currentSourceFilePath) {
           invokeParams = {
-            filePath: currentSourceFilePath,
+            filePath: appState.currentSourceFilePath,
             pageNum: pageIdx,
             enableNameDetection: true,
             password: password || null,
@@ -1952,11 +1165,10 @@ async function runPiiDetection(arrayBuffer, pageCount, password) {
         const detections = result.detections || [];
         totalDetections += detections.length;
 
-        // Register each detection as a region in the document state
         for (const det of detections) {
           try {
             await invoke("add_region", {
-              pageNum: pageIdx + 1, // 1-indexed for document state
+              pageNum: pageIdx + 1,
               region: {
                 id: det.id || generateId(),
                 bbox: det.bbox_pt || [0, 0, 0, 0],
@@ -1976,13 +1188,11 @@ async function runPiiDetection(arrayBuffer, pageCount, password) {
       }
     }
 
-    // Update sidebar and overlay with detected regions
     updateSidebarRegions();
     if (pdfViewer.isLoaded) {
       fetchAndDisplayRegions(pdfViewer.currentPage);
     }
 
-    // Log detection event
     if (isTauri) {
       invoke("get_document").then((doc) => {
         if (doc) {
@@ -2004,7 +1214,6 @@ async function runPiiDetection(arrayBuffer, pageCount, password) {
 
 async function openPdfFile() {
   console.log("openPdfFile called, isTauri:", isTauri, "status:", docStatusManager.getStatus());
-  // Block file open when a document is already loaded
   if (docStatusManager.getStatus()) {
     console.log("Blocked: document already loaded");
     return;
@@ -2014,7 +1223,6 @@ async function openPdfFile() {
 
   if (isTauri) {
     try {
-      // Dynamic import to avoid build errors in browser-only mode
       const { open } = await import("@tauri-apps/plugin-dialog");
       const filePath = await open({
         multiple: false,
@@ -2023,8 +1231,8 @@ async function openPdfFile() {
       console.log("Tauri file dialog result:", filePath);
       if (!filePath) return;
 
-      currentSourceFilePath = filePath;
-      currentPdfPassword = "";
+      appState.currentSourceFilePath = filePath;
+      appState.currentPdfPassword = "";
       console.log("Reading file via Tauri invoke...");
       const base64Data = await window.__TAURI__.core.invoke("read_file_as_base64", { path: filePath });
       const binaryStr = atob(base64Data);
@@ -2040,7 +1248,6 @@ async function openPdfFile() {
       return;
     }
   } else {
-    // Browser fallback: HTML file input
     result = await new Promise((resolve) => {
       const input = document.createElement("input");
       input.type = "file";
@@ -2071,15 +1278,11 @@ document.addEventListener("DOMContentLoaded", () => {
   console.log("RedactSafe initialized");
   initPdfViewer();
 
-  // --- PDF Viewer Events ---
-
   btnOpenPdf.addEventListener("click", openPdfFile);
 
-  // Footer toolbar All ON / All OFF
   const btnToolbarAllOn = document.getElementById("btn-toolbar-all-on");
   const btnToolbarAllOff = document.getElementById("btn-toolbar-all-off");
 
-  // --- Confirm / Rollback / Finalize buttons ---
   const btnConfirm = document.getElementById("btn-confirm");
   const btnRollback = document.getElementById("btn-rollback");
   const btnFinalize = document.getElementById("btn-finalize");
@@ -2087,7 +1290,6 @@ document.addEventListener("DOMContentLoaded", () => {
   btnConfirm.addEventListener("click", async () => {
     if (!docStatusManager.canConfirm()) return;
 
-    // Show operator name dialog
     const operator = await showOperatorDialog(
       "確認承認",
       "マスキング内容を確認し承認します。操作者の氏名を入力してください。"
@@ -2111,7 +1313,6 @@ document.addEventListener("DOMContentLoaded", () => {
   btnRollback.addEventListener("click", async () => {
     if (!docStatusManager.canRollback()) return;
 
-    // Show operator name dialog
     const operator = await showOperatorDialog(
       "差し戻し",
       "確認を取り消して編集可能な状態に戻します。操作者の氏名を入力してください。"
@@ -2135,14 +1336,12 @@ document.addEventListener("DOMContentLoaded", () => {
   btnFinalize.addEventListener("click", async () => {
     if (!docStatusManager.canFinalize()) return;
 
-    // Show operator name dialog
     const operator = await showOperatorDialog(
       "確定マスキングの実行",
       "黒塗りをPDFに焼き込み、安全なPDFを生成します。操作者の氏名を入力してください。"
     );
     if (!operator) return;
 
-    // Check if finalizer matches the document creator
     if (isTauri) {
       try {
         const isMatch = await invoke("check_finalizer_creator_match", {
@@ -2157,7 +1356,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
-    // Get document summary for confirmation dialog
     let summary;
     try {
       summary = await invoke("get_document_summary");
@@ -2170,7 +1368,6 @@ document.addEventListener("DOMContentLoaded", () => {
     const enabledRegions = summary?.enabled_regions ?? 0;
     const pageCount = summary?.page_count ?? 0;
 
-    // Final confirmation dialog with masking counts
     const confirmed = confirm(
       "確定マスキング処理を実行しますか？\n\n" +
       "・マスキング件数: " + enabledRegions + "件\n" +
@@ -2181,17 +1378,14 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!confirmed) return;
 
     try {
-      // Step 1: Generate the finalized PDF
       progressManager.show();
       progressMessage.textContent = "安全PDFを生成中...";
 
-      // Get source PDF file path
-      const sourceFile = currentSourceFilePath || summary?.source_file;
+      const sourceFile = appState.currentSourceFilePath || summary?.source_file;
       if (!sourceFile) {
         throw new Error("ソースPDFファイルのパスが見つかりません");
       }
 
-      // Show file save dialog first (before processing)
       const outputPath = await window.__TAURI__.dialog.save({
         title: "安全PDFの保存",
         defaultPath: generateOutputPath(sourceFile),
@@ -2199,17 +1393,15 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       if (!outputPath) {
-        // User cancelled save
         progressManager.hide();
         return;
       }
 
-      // Call finalize_masking_pdf with file path (no base64 encoding needed)
       const result = await invoke("finalize_masking_pdf", {
         pdfPath: sourceFile,
         dpi: 300,
         marginPt: 3.0,
-        password: currentPdfPassword || null,
+        password: appState.currentPdfPassword || null,
       });
 
       const tempOutputPath = result?.output_path;
@@ -2217,36 +1409,29 @@ document.addEventListener("DOMContentLoaded", () => {
         throw new Error("PDF生成に失敗しました");
       }
 
-      // Copy the temp output file to the user-chosen destination
       await window.__TAURI__.core.invoke("copy_file", {
         from: tempOutputPath,
         to: outputPath,
       });
 
-      // Clean up the temp file
       try {
         await window.__TAURI__.core.invoke("remove_file", { path: tempOutputPath });
       } catch (e) {
-        // Temp file cleanup failure is non-critical
         console.warn("Failed to clean up temp file:", e);
       }
 
-      // Step 4: Transition document status to finalized
       await invoke("finalize_document", {
         osUsername: operator.osUsername,
         displayName: operator.displayName,
       });
 
-      // Step 5: Set output file path
       await invoke("set_output_file", { path: outputPath });
 
-      // Step 6: Refresh UI
       progressManager.hide();
       await docStatusManager.refresh();
       await updateWatermark();
       await updateSidebarRegions();
 
-      // Log audit event
       logAuditEvent("document_finalized_saved", null, {
         output_path: outputPath,
         pages_processed: result?.pages_processed,
@@ -2267,15 +1452,8 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Block Ctrl+P at the window level (additional safeguard)
-  window.addEventListener("keydown", (e) => {
-    if (e.ctrlKey && e.key === "p") {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  }, true);
-
   btnToolbarAllOn.addEventListener("click", async () => {
+    const { testRegions } = appState;
     if (!isTauri) {
       testRegions.forEach((r) => (r.enabled = true));
       if (maskingOverlay) maskingOverlay.setRegions(testRegions);
@@ -2297,6 +1475,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   btnToolbarAllOff.addEventListener("click", async () => {
+    const { testRegions } = appState;
     if (!isTauri) {
       testRegions.forEach((r) => (r.enabled = false));
       if (maskingOverlay) maskingOverlay.setRegions(testRegions);
@@ -2357,13 +1536,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // Coordinate display on mouse move (on overlay canvas, which sits on top)
+  // Coordinate display on mouse move
   overlayCanvas.addEventListener("mousemove", (e) => {
     if (!pdfViewer.isLoaded) return;
     const pt = pdfViewer.screenToPdfPoint(e.clientX, e.clientY);
     coordDisplay.textContent = `${pt.x.toFixed(1)}, ${pt.y.toFixed(1)} pt`;
 
-    // Hover highlight (only when not in an interaction)
     if (maskingOverlay && interaction.mode === InteractionMode.NONE) {
       const region = maskingOverlay.findRegionAtPoint(e.clientX, e.clientY);
       const regionId = region ? region.id : null;
@@ -2381,28 +1559,27 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // --- Interaction Engine: mousedown / mousemove / mouseup ---
+  // Interaction Engine
   overlayCanvas.addEventListener("mousedown", onOverlayMouseDown);
   window.addEventListener("mousemove", onOverlayMouseMove);
   window.addEventListener("mouseup", onOverlayMouseUp);
 
-  // Double-click to toggle ON/OFF (only in editable state)
+  // Double-click to toggle ON/OFF
   overlayCanvas.addEventListener("dblclick", (e) => {
     if (!maskingOverlay) return;
     if (!docStatusManager.isEditable()) return;
     const region = maskingOverlay.findRegionAtPoint(e.clientX, e.clientY);
     if (region) {
       maskingOverlay.setSelectedRegion(region.id);
-      renderSidebar(); // Update sidebar selection
+      renderSidebar();
       toggleSelectedRegion();
     }
   });
 
-  // --- Drag & Drop Support ---
+  // Drag & Drop Support
   pdfContainer.addEventListener("dragover", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    // Block drag-over visual feedback when document is already loaded
     if (docStatusManager.getStatus()) return;
     pdfContainer.classList.add("drag-over");
   });
@@ -2418,7 +1595,6 @@ document.addEventListener("DOMContentLoaded", () => {
     e.stopPropagation();
     pdfContainer.classList.remove("drag-over");
 
-    // Block drop when document is already loaded (draft/confirmed/finalized)
     if (docStatusManager.getStatus()) {
       return;
     }
@@ -2436,102 +1612,15 @@ document.addEventListener("DOMContentLoaded", () => {
       await loadPdfWithAnalysis(arrayBuffer, file.name);
     } catch (err) {
       console.error("Failed to load dropped PDF:", err);
-      alert("PDFの読み込みに失敗しました: " + err.message);
+      showToast("PDFの読み込みに失敗しました: " + err.message);
     }
   });
 
-  // --- Keyboard Shortcuts ---
-  document.addEventListener("keydown", (e) => {
-    // Don't capture when typing in inputs
-    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") {
-      return;
-    }
-
-    // Ctrl+O: Open file (blocked when document is in confirmed/finalized state)
-    if (e.ctrlKey && e.key === "o") {
-      e.preventDefault();
-      if (!docStatusManager.getStatus()) {
-        openPdfFile();
-      }
-      return;
-    }
-
-    // Ctrl+P: Block print in draft/confirmed states
-    if (e.ctrlKey && e.key === "p") {
-      e.preventDefault();
-      return;
-    }
-
-    // Ctrl+S: Block save in draft/confirmed states
-    if (e.ctrlKey && e.key === "s") {
-      e.preventDefault();
-      return;
-    }
-
-    // Ctrl+Z: Undo (only in editable state)
-    if (e.ctrlKey && !e.shiftKey && e.key === "z") {
-      e.preventDefault();
-      if (docStatusManager.isEditable()) {
-        performUndo();
-      }
-      return;
-    }
-
-    // Ctrl+Shift+D: Toggle debug panel
-    if (e.ctrlKey && e.shiftKey && e.key === "D") {
-      e.preventDefault();
-      toggleDebugPanel();
-      return;
-    }
-
-    if (!pdfViewer.isLoaded) return;
-
-    // Delete / Backspace: Delete selected region (only in editable state)
-    if (e.key === "Delete" || e.key === "Backspace") {
-      e.preventDefault();
-      if (docStatusManager.isEditable()) {
-        deleteSelectedRegion();
-      }
-      return;
-    }
-
-    // Space: Toggle selected region ON/OFF (only in editable state)
-    if (e.key === " " && !e.ctrlKey && !e.shiftKey) {
-      e.preventDefault();
-      if (docStatusManager.isEditable()) {
-        toggleSelectedRegion();
-      }
-      return;
-    }
-
-    // Left/Right arrows: Page navigation
-    if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      pdfViewer.prevPage();
-    } else if (e.key === "ArrowRight") {
-      e.preventDefault();
-      pdfViewer.nextPage();
-    }
-
-    // Ctrl+/Ctrl-: Zoom
-    if (e.ctrlKey && (e.key === "=" || e.key === "+")) {
-      e.preventDefault();
-      pdfViewer.zoomIn();
-    } else if (e.ctrlKey && e.key === "-") {
-      e.preventDefault();
-      pdfViewer.zoomOut();
-    } else if (e.ctrlKey && e.key === "0") {
-      e.preventDefault();
-      pdfViewer.setZoom(1.0);
-    }
-  });
-
-  // --- Debug Panel ---
+  // Debug Panel
   btnCloseDebug.addEventListener("click", () => {
     debugPanel.style.display = "none";
   });
 
-  // Click backdrop to close
   debugPanel.addEventListener("click", (e) => {
     if (e.target === debugPanel) {
       debugPanel.style.display = "none";
@@ -2676,7 +1765,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnCreateDoc.addEventListener("click", async () => {
     try {
-      const osUsername = await getOsUsername();
+      const osUsername = await invoke("get_os_username");
       const docId = await invoke("create_document", {
         sourceFile: "test_sample.pdf",
         sourceHash: "sha256:testhash123",
@@ -2856,7 +1945,6 @@ document.addEventListener("DOMContentLoaded", () => {
       overlayResult.textContent = "Load a PDF first";
       return;
     }
-    // Add several test regions at various positions on the page
     const pageW = pdfViewer.pageWidthPt;
     const pageH = pdfViewer.pageHeightPt;
     const newRegions = [
@@ -2906,10 +1994,10 @@ document.addEventListener("DOMContentLoaded", () => {
         note: "手動追加テスト",
       },
     ];
-    testRegions = [...testRegions, ...newRegions];
-    maskingOverlay.setRegions(testRegions);
+    appState.testRegions = [...appState.testRegions, ...newRegions];
+    maskingOverlay.setRegions(appState.testRegions);
     updateSidebarRegions();
-    overlayResult.textContent = `Added ${newRegions.length} regions (total: ${testRegions.length})`;
+    overlayResult.textContent = `Added ${newRegions.length} regions (total: ${appState.testRegions.length})`;
   });
 
   btnAddManualRegion.addEventListener("click", () => {
@@ -2917,7 +2005,6 @@ document.addEventListener("DOMContentLoaded", () => {
       overlayResult.textContent = "Load a PDF first";
       return;
     }
-    // Add a manual region at a random position
     const pageW = pdfViewer.pageWidthPt;
     const pageH = pdfViewer.pageHeightPt;
     const x = 72 + Math.random() * (pageW - 200);
@@ -2931,8 +2018,8 @@ document.addEventListener("DOMContentLoaded", () => {
       source: "manual",
       note: "手動追加",
     };
-    testRegions.push(newRegion);
-    maskingOverlay.setRegions(testRegions);
+    appState.testRegions.push(newRegion);
+    maskingOverlay.setRegions(appState.testRegions);
     maskingOverlay.setSelectedRegion(newRegion.id);
     updateSidebarRegions();
     overlayResult.textContent = `Manual region added: ${newRegion.id}`;
@@ -2940,7 +2027,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnClearOverlay.addEventListener("click", () => {
     if (!maskingOverlay) return;
-    testRegions = [];
+    appState.testRegions = [];
     maskingOverlay.clear();
     updateSidebarRegions();
     overlayResult.textContent = "Overlay cleared";
@@ -2948,37 +2035,38 @@ document.addEventListener("DOMContentLoaded", () => {
 
   btnToggleTestOn.addEventListener("click", async () => {
     if (!maskingOverlay) return;
-    testRegions.forEach((r) => (r.enabled = true));
-    maskingOverlay.setRegions(testRegions);
+    appState.testRegions.forEach((r) => (r.enabled = true));
+    maskingOverlay.setRegions(appState.testRegions);
     updateSidebarRegions();
     overlayResult.textContent = "All regions ON";
-    logAuditEvent("all_regions_enabled", null, { count: testRegions.length });
+    logAuditEvent("all_regions_enabled", null, { count: appState.testRegions.length });
   });
 
   btnToggleTestOff.addEventListener("click", async () => {
     if (!maskingOverlay) return;
-    testRegions.forEach((r) => (r.enabled = false));
-    maskingOverlay.setRegions(testRegions);
+    appState.testRegions.forEach((r) => (r.enabled = false));
+    maskingOverlay.setRegions(appState.testRegions);
     updateSidebarRegions();
     overlayResult.textContent = "All regions OFF";
-    logAuditEvent("all_regions_disabled", null, { count: testRegions.length });
+    logAuditEvent("all_regions_disabled", null, { count: appState.testRegions.length });
   });
 
   btnSelectNext.addEventListener("click", () => {
-    if (!maskingOverlay || testRegions.length === 0) {
-      overlayResult.textContent = "No regions";
-      return;
-    }
-    const current = maskingOverlay.selectedRegionId;
-    const currentIdx = testRegions.findIndex((r) => r.id === current);
-    const nextIdx = (currentIdx + 1) % testRegions.length;
-    maskingOverlay.setSelectedRegion(testRegions[nextIdx].id);
-    overlayResult.textContent = `Selected: ${testRegions[nextIdx].id} (${testRegions[nextIdx].type})`;
+    if (!maskingOverlay || !pdfViewer.isLoaded) return;
+    const regions = maskingOverlay.regions;
+    if (regions.length === 0) return;
+    const currentId = maskingOverlay.selectedRegionId;
+    const currentIdx = regions.findIndex((r) => r.id === currentId);
+    const nextIdx = (currentIdx + 1) % regions.length;
+    maskingOverlay.setSelectedRegion(regions[nextIdx].id);
+    renderSidebar();
+    overlayResult.textContent = `Selected: ${regions[nextIdx].id}`;
   });
 
   btnDeselect.addEventListener("click", () => {
     if (!maskingOverlay) return;
     maskingOverlay.setSelectedRegion(null);
+    renderSidebar();
     overlayResult.textContent = "Deselected";
   });
 });
@@ -2989,174 +2077,24 @@ function toggleDebugPanel() {
 }
 
 // ============================================================
-// Settings Manager
-// ============================================================
-
-const FONT_SIZE_CLASSES = {
-  standard: "",
-  large: "font-size-large",
-  xlarge: "font-size-xlarge",
-};
-
-const DEFAULT_SETTINGS = {
-  fontSize: "standard",
-  compression: "png",
-  jpegQuality: 90,
-};
-
-/** Load settings from localStorage */
-function loadSettings() {
-  try {
-    const stored = localStorage.getItem("redactsafe_settings");
-    if (stored) {
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return { ...DEFAULT_SETTINGS };
-}
-
-/** Save settings to localStorage */
-function saveSettings(settings) {
-  try {
-    localStorage.setItem("redactsafe_settings", JSON.stringify(settings));
-  } catch {
-    // Ignore storage errors
-  }
-}
-
-/** Apply settings to the UI */
-function applySettings(settings) {
-  // Font size
-  document.body.classList.remove("font-size-large", "font-size-xlarge");
-  const fontClass = FONT_SIZE_CLASSES[settings.fontSize] || "";
-  if (fontClass) document.body.classList.add(fontClass);
-}
-
-/** Get current settings */
-let currentSettings = loadSettings();
-applySettings(currentSettings);
-
-const settingsDialog = document.getElementById("settings-dialog");
-const btnSettingsOk = document.getElementById("btn-settings-ok");
-const btnSettingsCancel = document.getElementById("btn-settings-cancel");
-const jpegQualitySlider = document.getElementById("jpeg-quality-slider");
-const jpegQualityValue = document.getElementById("jpeg-quality-value");
-const jpegQualitySection = document.getElementById("jpeg-quality-section");
-
-function showSettingsDialog() {
-  const settings = loadSettings();
-
-  // Set radio buttons
-  const fontRadios = document.querySelectorAll('input[name="font-size"]');
-  fontRadios.forEach((r) => { r.checked = r.value === settings.fontSize; });
-
-  const compRadios = document.querySelectorAll('input[name="compression"]');
-  compRadios.forEach((r) => { r.checked = r.value === settings.compression; });
-
-  // Set JPEG quality
-  jpegQualitySlider.value = settings.jpegQuality;
-  jpegQualityValue.textContent = settings.jpegQuality;
-  jpegQualitySection.style.display = settings.compression === "jpeg" ? "block" : "none";
-
-  settingsDialog.style.display = "flex";
-
-  // Focus the first radio button
-  setTimeout(() => {
-    const firstRadio = settingsDialog.querySelector('input[type="radio"]');
-    if (firstRadio) firstRadio.focus();
-  }, 50);
-}
-
-function hideSettingsDialog() {
-  settingsDialog.style.display = "none";
-}
-
-// JPEG quality slider live update
-jpegQualitySlider.addEventListener("input", () => {
-  jpegQualityValue.textContent = jpegQualitySlider.value;
-});
-
-// Show/hide JPEG quality section when compression changes
-document.querySelectorAll('input[name="compression"]').forEach((r) => {
-  r.addEventListener("change", () => {
-    jpegQualitySection.style.display = r.value === "jpeg" && r.checked ? "block" : "none";
-  });
-});
-
-btnSettingsOk.addEventListener("click", () => {
-  const fontSize = document.querySelector('input[name="font-size"]:checked')?.value || "standard";
-  const compression = document.querySelector('input[name="compression"]:checked')?.value || "png";
-  const jpegQuality = parseInt(jpegQualitySlider.value, 10);
-
-  currentSettings = { fontSize, compression, jpegQuality };
-  saveSettings(currentSettings);
-  applySettings(currentSettings);
-  hideSettingsDialog();
-});
-
-btnSettingsCancel.addEventListener("click", () => {
-  hideSettingsDialog();
-});
-
-// Escape to close settings
-settingsDialog.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    hideSettingsDialog();
-  }
-});
-
-// ============================================================
-// Help Dialog
-// ============================================================
-
-const helpDialog = document.getElementById("help-dialog");
-const btnHelpClose = document.getElementById("btn-help-close");
-
-function showHelpDialog() {
-  helpDialog.style.display = "flex";
-  setTimeout(() => {
-    btnHelpClose.focus();
-  }, 50);
-}
-
-function hideHelpDialog() {
-  helpDialog.style.display = "none";
-}
-
-btnHelpClose.addEventListener("click", () => {
-  hideHelpDialog();
-});
-
-helpDialog.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    hideHelpDialog();
-  }
-});
-
-// ============================================================
 // Window Resize Handler
 // ============================================================
 
 window.addEventListener("resize", () => {
   if (!pdfViewer || !pdfViewer.isLoaded) return;
 
-  // Resize overlay canvas to match PDF canvas
   if (maskingOverlay) {
     maskingOverlay.resize(pdfCanvas.width, pdfCanvas.height);
   }
 
-  // Re-render overlay with current regions
   if (maskingOverlay && maskingOverlay.regions.length > 0) {
     maskingOverlay.render();
   }
 });
 
 // ============================================================
-// Additional Keyboard Shortcuts
+// Unified Keyboard Shortcuts
+// (Merges the two separate keydown listeners into one)
 // ============================================================
 
 document.addEventListener("keydown", (e) => {
@@ -3165,10 +2103,31 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
+  // Ctrl+P: Block print (capture phase handled separately below)
+  if (e.ctrlKey && e.key === "p") {
+    e.preventDefault();
+    return;
+  }
+
+  // Ctrl+S: Block save
+  if (e.ctrlKey && e.key === "s") {
+    e.preventDefault();
+    return;
+  }
+
   // Ctrl+,: Open settings
   if (e.ctrlKey && e.key === ",") {
     e.preventDefault();
     showSettingsDialog();
+    return;
+  }
+
+  // Ctrl+O: Open file
+  if (e.ctrlKey && e.key === "o") {
+    e.preventDefault();
+    if (!docStatusManager.getStatus()) {
+      openPdfFile();
+    }
     return;
   }
 
@@ -3184,15 +2143,32 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  // Escape: Deselect region or close modals
+  // Ctrl+Z: Undo
+  if (e.ctrlKey && !e.shiftKey && e.key === "z") {
+    e.preventDefault();
+    if (docStatusManager.isEditable()) {
+      performUndo();
+    }
+    return;
+  }
+
+  // Ctrl+Shift+D: Toggle debug panel
+  if (e.ctrlKey && e.shiftKey && e.key === "D") {
+    e.preventDefault();
+    toggleDebugPanel();
+    return;
+  }
+
+  // Escape: Close menus → close modals → deselect region
   if (e.key === "Escape" && !e.ctrlKey && !e.shiftKey) {
-    // Close settings dialog if open
-    if (settingsDialog.style.display === "flex") {
+    // Menu close is handled by menu.js with stopPropagation
+    // Settings dialog
+    if (isSettingsDialogOpen()) {
       hideSettingsDialog();
       return;
     }
-    // Close help dialog if open
-    if (helpDialog.style.display === "flex") {
+    // Help dialog
+    if (isHelpDialogOpen()) {
       hideHelpDialog();
       return;
     }
@@ -3205,12 +2181,11 @@ document.addEventListener("keydown", (e) => {
     return;
   }
 
-  // Tab: Navigate between regions (cycle through)
+  // Tab: Navigate between regions
   if (e.key === "Tab" && !e.ctrlKey) {
     e.preventDefault();
-    if (!maskingOverlay || !pdfViewer.isLoaded) return;
+    if (!maskingOverlay || !pdfViewer || !pdfViewer.isLoaded) return;
 
-    // Get all regions for the current page
     const regions = maskingOverlay.regions;
     if (regions.length === 0) return;
 
@@ -3219,10 +2194,8 @@ document.addEventListener("keydown", (e) => {
 
     let nextIdx;
     if (e.shiftKey) {
-      // Shift+Tab: Previous region
       nextIdx = currentIdx <= 0 ? regions.length - 1 : currentIdx - 1;
     } else {
-      // Tab: Next region
       nextIdx = (currentIdx + 1) % regions.length;
     }
 
@@ -3230,4 +2203,53 @@ document.addEventListener("keydown", (e) => {
     renderSidebar();
     return;
   }
+
+  if (!pdfViewer || !pdfViewer.isLoaded) return;
+
+  // Delete / Backspace: Delete selected region
+  if (e.key === "Delete" || e.key === "Backspace") {
+    e.preventDefault();
+    if (docStatusManager.isEditable()) {
+      deleteSelectedRegion();
+    }
+    return;
+  }
+
+  // Space: Toggle selected region ON/OFF
+  if (e.key === " " && !e.ctrlKey && !e.shiftKey) {
+    e.preventDefault();
+    if (docStatusManager.isEditable()) {
+      toggleSelectedRegion();
+    }
+    return;
+  }
+
+  // Left/Right arrows: Page navigation
+  if (e.key === "ArrowLeft") {
+    e.preventDefault();
+    pdfViewer.prevPage();
+  } else if (e.key === "ArrowRight") {
+    e.preventDefault();
+    pdfViewer.nextPage();
+  }
+
+  // Ctrl+/Ctrl-/Ctrl+0: Zoom
+  if (e.ctrlKey && (e.key === "=" || e.key === "+")) {
+    e.preventDefault();
+    pdfViewer.zoomIn();
+  } else if (e.ctrlKey && e.key === "-") {
+    e.preventDefault();
+    pdfViewer.zoomOut();
+  } else if (e.ctrlKey && e.key === "0") {
+    e.preventDefault();
+    pdfViewer.setZoom(1.0);
+  }
 });
+
+// Ctrl+P block on capture phase (must be on window to take priority)
+window.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key === "p") {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+}, true);

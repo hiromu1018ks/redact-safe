@@ -315,7 +315,7 @@ v1と同じ（変更なし）
       "各モジュールファイルが1000行以下であることを確認",
       "npm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "ux",
