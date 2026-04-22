@@ -143,6 +143,14 @@ from pdf_sanitizer import (
 )
 
 
+def _validate_page_num(page_num, min_val=0, max_val=None):
+    """Validate page_num parameter. Raises ValueError if invalid."""
+    if not isinstance(page_num, (int, float)) or page_num < min_val:
+        raise ValueError("Invalid page number")
+    if max_val is not None and page_num > max_val:
+        raise ValueError("Invalid page number")
+
+
 def _open_pdf(params: dict, allow_encrypted_detection: bool = False):
     """Open a PDF from base64-encoded data or file path. Returns (doc, pdf_bytes).
 
@@ -330,6 +338,8 @@ def handle_run_ocr(params: dict, request_id: int = 0) -> dict:
     dpi = params.get("dpi", 300)
     password = params.get("password", "")
 
+    _validate_page_num(page_num)
+
     if not pdf_path and not pdf_data_b64:
         raise ValueError("pdf_path or pdf_data is required")
 
@@ -350,6 +360,8 @@ def handle_run_layout_analysis(params: dict) -> dict:
     dpi = params.get("dpi", 300)
     password = params.get("password", "")
 
+    _validate_page_num(page_num)
+
     if not pdf_path and not pdf_data_b64:
         raise ValueError("pdf_path or pdf_data is required")
 
@@ -364,6 +376,8 @@ def handle_extract_text_digital(params: dict) -> dict:
     pdf_data_b64 = params.get("pdf_data", "")
     page_num = params.get("page_num", 0)
     password = params.get("password", "")
+
+    _validate_page_num(page_num)
 
     if not pdf_path and not pdf_data_b64:
         raise ValueError("pdf_path or pdf_data is required")
@@ -386,6 +400,8 @@ def handle_run_text_extraction(params: dict, request_id: int = 0) -> dict:
     page_num = params.get("page_num", 0)
     dpi = params.get("dpi", 300)
     password = params.get("password", "")
+
+    _validate_page_num(page_num)
 
     if not pdf_path and not pdf_data_b64:
         raise ValueError("pdf_path or pdf_data is required")
@@ -453,6 +469,8 @@ def handle_normalize_bboxes(params: dict) -> dict:
     password = params.get("password", "")
     merge_lines = params.get("merge_lines", True)
 
+    _validate_page_num(page_num)
+
     if not pdf_data_b64:
         raise ValueError("pdf_data is required")
     if not regions:
@@ -498,6 +516,8 @@ def handle_detect_pii_pdf(params: dict, request_id: int = 0) -> dict:
     password = params.get("password", "")
     enable_name_detection = params.get("enable_name_detection", True)
     custom_rules_dir = params.get("custom_rules_dir", None)
+
+    _validate_page_num(page_num)
 
     if not pdf_path and not pdf_data_b64:
         raise ValueError("pdf_path or pdf_data is required")
@@ -915,10 +935,12 @@ def process_message(line: str):
             result = HANDLERS[method](params)
         send_response(msg_id, result=result)
     except Exception as e:
+        # Log traceback to stderr for debugging, but don't expose it to the client
+        sys.stderr.write(f"Handler error for {method}: {traceback.format_exc()}")
+        sys.stderr.flush()
         send_response(msg_id, error={
             "code": -32603,
-            "message": f"Internal error: {e}",
-            "data": traceback.format_exc(),
+            "message": "Internal error",
         })
 
 
