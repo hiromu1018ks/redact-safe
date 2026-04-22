@@ -156,7 +156,7 @@ v1と同じ（変更なし）
       "再起動時にinfoレベルのログを記録",
       "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "stability",

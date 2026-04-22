@@ -10,6 +10,45 @@ use tauri::{Emitter, State};
 
 struct WorkerState(Mutex<Option<PythonWorker>>);
 
+/// Ensure the worker process is alive, restarting it if necessary.
+/// Returns a locked MutexGuard holding the mutable PythonWorker.
+fn ensure_worker_alive<'a>(
+    state: &'a State<'a, WorkerState>,
+    app_handle: &'a tauri::AppHandle,
+) -> Result<std::sync::MutexGuard<'a, Option<PythonWorker>>, String> {
+    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
+
+    if let Some(ref mut worker) = *guard {
+        if !worker.is_alive() {
+            log::info!("Python worker process died, auto-restarting...");
+            // Drop the old worker (its Drop impl will clean up)
+            *guard = None;
+        }
+    }
+
+    if guard.is_none() {
+        log::info!("Spawning new Python worker (auto-restart)");
+        let new_worker = PythonWorker::spawn(app_handle)?;
+        *guard = Some(new_worker);
+    }
+
+    Ok(guard)
+}
+
+/// Call a Python worker method with auto-restart on dead process.
+fn worker_call(
+    state: &State<WorkerState>,
+    app_handle: &tauri::AppHandle,
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let mut guard = ensure_worker_alive(state, app_handle)?;
+    let worker = guard
+        .as_mut()
+        .ok_or("Python worker not initialized")?;
+    worker.call(method, params)
+}
+
 struct AuditState(Mutex<AuditLogger>);
 
 struct DocumentState(Mutex<Option<MaskingDocument>>);
@@ -19,20 +58,15 @@ struct AutoSavePathState(Mutex<Option<String>>);
 
 #[tauri::command]
 fn worker_ping(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     message: Option<String>,
 ) -> Result<PingResponse, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "message": message.unwrap_or_default()
     });
 
-    let result = worker.call("ping", Some(params))?;
+    let result = worker_call(&state, &app_handle, "ping", Some(params))?;
 
     Ok(PingResponse {
         pong: result["pong"].as_bool().unwrap_or(false),
@@ -629,16 +663,12 @@ fn get_document_summary(state: State<DocumentState>) -> Result<Option<serde_json
 /// Accepts either a file path (preferred) or base64-encoded data.
 #[tauri::command]
 fn analyze_pdf(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     file_path: Option<String>,
     pdf_data_base64: Option<String>,
     password: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = if let Some(path) = file_path {
         serde_json::json!({
             "pdf_path": path,
@@ -651,23 +681,18 @@ fn analyze_pdf(
         })
     };
 
-    let result = worker.call("analyze_pdf", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "analyze_pdf", Some(params))
 }
 
 /// Attempt to decrypt a PDF with a password via Python worker.
 #[tauri::command]
 fn decrypt_pdf(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     file_path: Option<String>,
     pdf_data_base64: Option<String>,
     password: String,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let mut params = serde_json::json!({
         "password": password,
     });
@@ -677,8 +702,7 @@ fn decrypt_pdf(
         params["pdf_data"] = serde_json::json!(pdf_data_base64.unwrap_or_default());
     }
 
-    let result = worker.call("decrypt_pdf", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "decrypt_pdf", Some(params))
 }
 
 // --- OCR Commands ---
@@ -686,6 +710,7 @@ fn decrypt_pdf(
 /// Run OCR pipeline on a single page via Python worker.
 #[tauri::command]
 fn run_ocr(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     file_path: Option<String>,
     pdf_data_base64: Option<String>,
@@ -693,11 +718,6 @@ fn run_ocr(
     dpi: Option<u32>,
     password: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let mut params = serde_json::json!({
         "page_num": page_num,
         "dpi": dpi.unwrap_or(300),
@@ -709,24 +729,19 @@ fn run_ocr(
         params["pdf_data"] = serde_json::json!(pdf_data_base64.unwrap_or_default());
     }
 
-    let result = worker.call("run_ocr", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "run_ocr", Some(params))
 }
 
 /// Run layout analysis on a single page via Python worker.
 #[tauri::command]
 fn run_layout_analysis(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     pdf_data_base64: String,
     page_num: u32,
     dpi: Option<u32>,
     password: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "pdf_data": pdf_data_base64,
         "page_num": page_num,
@@ -734,36 +749,31 @@ fn run_layout_analysis(
         "password": password.unwrap_or_default(),
     });
 
-    let result = worker.call("run_layout_analysis", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "run_layout_analysis", Some(params))
 }
 
 /// Extract text from a digital PDF page via Python worker (PyMuPDF text layer).
 #[tauri::command]
 fn extract_text_digital(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     pdf_data_base64: String,
     page_num: u32,
     password: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "pdf_data": pdf_data_base64,
         "page_num": page_num,
         "password": password.unwrap_or_default(),
     });
 
-    let result = worker.call("extract_text_digital", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "extract_text_digital", Some(params))
 }
 
 /// Unified text extraction: digital path first, OCR fallback via Python worker.
 #[tauri::command]
 fn run_text_extraction(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     file_path: Option<String>,
     pdf_data_base64: Option<String>,
@@ -771,11 +781,6 @@ fn run_text_extraction(
     dpi: Option<u32>,
     password: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let mut params = serde_json::json!({
         "page_num": page_num,
         "dpi": dpi.unwrap_or(300),
@@ -787,8 +792,7 @@ fn run_text_extraction(
         params["pdf_data"] = serde_json::json!(pdf_data_base64.unwrap_or_default());
     }
 
-    let result = worker.call("run_text_extraction", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "run_text_extraction", Some(params))
 }
 
 // --- BBox Normalization Commands ---
@@ -797,6 +801,7 @@ fn run_text_extraction(
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 fn normalize_bboxes(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     pdf_data_base64: String,
     page_num: u32,
@@ -806,11 +811,6 @@ fn normalize_bboxes(
     password: Option<String>,
     merge_lines: Option<bool>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "pdf_data": pdf_data_base64,
         "page_num": page_num,
@@ -821,8 +821,7 @@ fn normalize_bboxes(
         "merge_lines": merge_lines.unwrap_or(true),
     });
 
-    let result = worker.call("normalize_bboxes", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "normalize_bboxes", Some(params))
 }
 
 // --- PII Detection Commands ---
@@ -830,6 +829,7 @@ fn normalize_bboxes(
 /// Detect PII in text regions using regex-based rules + MeCab name detection via Python worker.
 #[tauri::command]
 fn detect_pii(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     text_regions: serde_json::Value,
     enabled_types: Option<Vec<String>>,
@@ -837,11 +837,6 @@ fn detect_pii(
     enable_name_detection: Option<bool>,
     custom_rules_dir: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "text_regions": text_regions,
         "enabled_types": enabled_types,
@@ -850,14 +845,14 @@ fn detect_pii(
         "custom_rules_dir": custom_rules_dir,
     });
 
-    let result = worker.call("detect_pii", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "detect_pii", Some(params))
 }
 
 /// Detect PII from a PDF page (combines text extraction + detection) via Python worker.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 fn detect_pii_pdf(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     file_path: Option<String>,
     pdf_data_base64: Option<String>,
@@ -868,11 +863,6 @@ fn detect_pii_pdf(
     enable_name_detection: Option<bool>,
     custom_rules_dir: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let mut params = serde_json::json!({
         "page_num": page_num,
         "enabled_types": enabled_types,
@@ -887,128 +877,97 @@ fn detect_pii_pdf(
         params["pdf_data"] = serde_json::json!(pdf_data_base64.unwrap_or_default());
     }
 
-    let result = worker.call("detect_pii_pdf", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "detect_pii_pdf", Some(params))
 }
 
 /// Load detection rules from YAML file via Python worker.
 #[tauri::command]
 fn load_detection_rules(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     rules_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "rules_path": rules_path,
     });
 
-    let result = worker.call("load_detection_rules", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "load_detection_rules", Some(params))
 }
 
 /// Load custom rules from the custom rules directory via Python worker.
 #[tauri::command]
 fn load_custom_rules(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     rules_dir: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "rules_dir": rules_dir,
     });
 
-    let result = worker.call("load_custom_rules", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "load_custom_rules", Some(params))
 }
 
 /// Load and merge bundled + custom rules via Python worker.
 #[tauri::command]
 fn load_all_rules(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     rules_path: Option<String>,
     custom_rules_dir: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "rules_path": rules_path,
         "custom_rules_dir": custom_rules_dir,
     });
 
-    let result = worker.call("load_all_rules", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "load_all_rules", Some(params))
 }
 
 /// Validate detection rules against the schema via Python worker.
 #[tauri::command]
 fn validate_rules(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     rules_content: String,
     format: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "rules_content": rules_content,
         "format": format,
     });
 
-    let result = worker.call("validate_rules", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "validate_rules", Some(params))
 }
 
 /// Check a regex pattern for catastrophic backtracking risks via Python worker.
 #[tauri::command]
 fn check_regex_safety(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     pattern: String,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "pattern": pattern,
     });
 
-    let result = worker.call("check_regex_safety", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "check_regex_safety", Some(params))
 }
 
 /// Detect person names in text regions using MeCab morphological analysis via Python worker.
 #[tauri::command]
 fn detect_names(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     text_regions: serde_json::Value,
     enabled_types: Option<Vec<String>>,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "text_regions": text_regions,
         "enabled_types": enabled_types,
     });
 
-    let result = worker.call("detect_names", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "detect_names", Some(params))
 }
 
 /// Finalize masking: rasterize PDF pages, burn black rectangles, regenerate PDF via Python worker.
@@ -1016,6 +975,7 @@ fn detect_names(
 /// The Python worker now also sanitizes hidden data and verifies the output.
 #[tauri::command]
 fn finalize_masking_pdf(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     doc_state: State<DocumentState>,
     pdf_path: String,
@@ -1052,11 +1012,6 @@ fn finalize_masking_pdf(
     }
 
     // Call Python worker to perform the finalization (includes sanitization + verification)
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "pdf_path": pdf_path,
         "pages": pages_info,
@@ -1065,28 +1020,21 @@ fn finalize_masking_pdf(
         "password": password.unwrap_or_default(),
     });
 
-    let result = worker.call("finalize_masking", Some(params))?;
-
-    Ok(result)
+    worker_call(&state, &app_handle, "finalize_masking", Some(params))
 }
 
 /// Verify that a finalized PDF is safe (no text, no hidden data) via Python worker.
 #[tauri::command]
 fn verify_safe_pdf(
+    app_handle: tauri::AppHandle,
     state: State<WorkerState>,
     pdf_data_base64: String,
 ) -> Result<serde_json::Value, String> {
-    let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
-    let worker = guard
-        .as_mut()
-        .ok_or("Python worker not initialized")?;
-
     let params = serde_json::json!({
         "pdf_data": pdf_data_base64,
     });
 
-    let result = worker.call("verify_safe_pdf", Some(params))?;
-    Ok(result)
+    worker_call(&state, &app_handle, "verify_safe_pdf", Some(params))
 }
 
 /// Generate the output filename for a finalized safe PDF.
