@@ -54,6 +54,9 @@ const btnSidebarAllOff = document.getElementById("btn-sidebar-all-off");
 /** All regions across all pages (fetched from backend or test regions) */
 let allRegionsByPage = {}; // { pageNum: [regions...] }
 
+/** Test regions for browser/debug mode */
+let testRegions = [];
+
 /** Currently active filter state */
 let sidebarFilter = { type: "all", status: "all" };
 
@@ -1635,22 +1638,27 @@ async function analyzePdfWithWorker(pdfData) {
   try {
     // Ensure Python worker is initialized
     try {
-      await invoke("init_worker");
-    } catch {
-      console.warn("Python worker initialization failed, continuing without analysis");
+      const workerResult = await invoke("init_worker");
+      console.log("Python worker initialized:", workerResult);
+    } catch (e) {
+      console.error("Python worker initialization failed:", e);
       return null;
     }
 
     progressManager.show();
     progressManager.update({ phase: "analyzing", current: 0, total: 1, message: "PDFを解析中..." });
-    const base64 = arrayBufferToBase64(pdfData);
-    const result = await invoke("analyze_pdf", {
-      pdfDataBase64: base64,
-      password: null,
-    });
+
+    // Prefer file path over base64 to avoid huge data transfer
+    let invokeParams;
+    if (currentSourceFilePath) {
+      invokeParams = { filePath: currentSourceFilePath, password: null };
+    } else {
+      invokeParams = { pdfDataBase64: arrayBufferToBase64(pdfData), password: null };
+    }
+    const result = await invoke("analyze_pdf", invokeParams);
     return result;
   } catch (e) {
-    console.warn("PDF analysis via Python worker failed:", e);
+    console.error("PDF analysis via Python worker failed:", e);
     return null;
   } finally {
     progressManager.hide();
@@ -1762,7 +1770,6 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
  * Extracts text, detects PII, and registers detected regions in the document state.
  */
 async function runPiiDetection(arrayBuffer, pageCount, password) {
-  const base64 = arrayBufferToBase64(arrayBuffer);
   let totalDetections = 0;
 
   try {
@@ -1783,12 +1790,24 @@ async function runPiiDetection(arrayBuffer, pageCount, password) {
           message: "個人情報を検出中... (" + (pageIdx + 1) + "/" + pageCount + "ページ)",
         });
 
-        const result = await invoke("detect_pii_pdf", {
-          pdfDataBase64: base64,
-          pageNum: pageIdx,
-          enableNameDetection: true,
-          password: password || null,
-        });
+        // Prefer file path over base64 to avoid huge data transfer
+        let invokeParams;
+        if (currentSourceFilePath) {
+          invokeParams = {
+            filePath: currentSourceFilePath,
+            pageNum: pageIdx,
+            enableNameDetection: true,
+            password: password || null,
+          };
+        } else {
+          invokeParams = {
+            pdfDataBase64: arrayBufferToBase64(arrayBuffer),
+            pageNum: pageIdx,
+            enableNameDetection: true,
+            password: password || null,
+          };
+        }
+        const result = await invoke("detect_pii_pdf", invokeParams);
 
         const detections = result.detections || [];
         totalDetections += detections.length;
@@ -1844,8 +1863,10 @@ async function runPiiDetection(arrayBuffer, pageCount, password) {
 }
 
 async function openPdfFile() {
+  console.log("openPdfFile called, isTauri:", isTauri, "status:", docStatusManager.getStatus());
   // Block file open when a document is already loaded
   if (docStatusManager.getStatus()) {
+    console.log("Blocked: document already loaded");
     return;
   }
 
@@ -1859,15 +1880,21 @@ async function openPdfFile() {
         multiple: false,
         filters: [{ name: "PDF Files", extensions: ["pdf"] }],
       });
+      console.log("Tauri file dialog result:", filePath);
       if (!filePath) return;
 
       currentSourceFilePath = filePath;
       currentPdfPassword = "";
-      const url = window.__TAURI__.core.convertFileSrc(filePath);
-      const response = await fetch(url);
-      const arrayBuffer = await response.arrayBuffer();
+      console.log("Reading file via Tauri invoke...");
+      const base64Data = await window.__TAURI__.core.invoke("read_file_as_base64", { path: filePath });
+      const binaryStr = atob(base64Data);
+      const arrayBuffer = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        arrayBuffer[i] = binaryStr.charCodeAt(i);
+      }
       const fileName = filePath.split(/[/\\]/).pop() || "document.pdf";
-      result = { data: arrayBuffer, fileName };
+      result = { data: arrayBuffer.buffer, fileName };
+      console.log("File loaded, size:", arrayBuffer.byteLength);
     } catch (e) {
       console.error("Failed to open file via Tauri dialog:", e);
       return;
@@ -2676,9 +2703,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnToggleTestOff = document.getElementById("btn-toggle-test-off");
   const btnSelectNext = document.getElementById("btn-select-next");
   const btnDeselect = document.getElementById("btn-deselect");
-
-  // Track test regions locally for browser testing
-  let testRegions = [];
 
   btnAddTestRegions.addEventListener("click", () => {
     if (!maskingOverlay || !pdfViewer.isLoaded) {

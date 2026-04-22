@@ -6,6 +6,12 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString();
 
+// CMap URL for CJK (Japanese/Chinese/Korean) text rendering
+const cMapUrl = new URL(
+  "pdfjs-dist/cmaps/",
+  import.meta.url
+).toString().replace(/\/?$/, "/");
+
 export class PdfViewer {
   constructor(canvasEl) {
     this.canvas = canvasEl;
@@ -49,9 +55,17 @@ export class PdfViewer {
   async loadPdf(source, fileName = "") {
     let loadingTask;
     if (source instanceof Uint8Array || source instanceof ArrayBuffer) {
-      loadingTask = pdfjsLib.getDocument({ data: source });
+      loadingTask = pdfjsLib.getDocument({
+        data: source,
+        cMapUrl: cMapUrl,
+        cMapPacked: true,
+      });
     } else {
-      loadingTask = pdfjsLib.getDocument(source);
+      loadingTask = pdfjsLib.getDocument({
+        url: source,
+        cMapUrl: cMapUrl,
+        cMapPacked: true,
+      });
     }
 
     this.pdfDoc = await loadingTask.promise;

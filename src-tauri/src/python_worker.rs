@@ -32,6 +32,8 @@ struct JsonRpcResponse {
 struct JsonRpcError {
     code: i64,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<serde_json::Value>,
 }
 
 /// Progress notification from Python worker (via stderr)
@@ -69,6 +71,7 @@ impl PythonWorker {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .env("PYTHONIOENCODING", "utf-8")
             .creation_flags(0x08000000) // CREATE_NO_WINDOW on Windows
             .spawn()
             .map_err(|e| format!("Failed to spawn Python worker: {}", e))?;
@@ -135,7 +138,20 @@ impl PythonWorker {
 
     /// Find Python executable
     fn find_python() -> Option<PathBuf> {
-        // Try common Python commands
+        // 1. Try venv in current dir and parent dirs (handles src-tauri/ CWD)
+        let mut dir = std::env::current_dir().ok()?;
+        for _ in 0..5 {
+            let venv_python = dir.join(".venv").join("Scripts").join("python.exe");
+            if venv_python.exists() {
+                log::info!("Found venv Python: {}", venv_python.display());
+                return Some(venv_python);
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+
+        // 2. Try common Python commands
         let candidates = ["python3", "python", "py"];
         for cmd in candidates {
             if let Ok(output) = Command::new(cmd).arg("--version").output() {
@@ -155,10 +171,11 @@ impl PythonWorker {
             .map_err(|e| format!("Failed to get resource dir: {}", e))?;
 
         // In dev mode, worker.py is at <project_root>/python-worker/worker.py
-        // In production, it will be bundled with the app
+        // resource_dir is src-tauri/target/debug, so we need .parent() x3
         let dev_path = resource_path
-            .parent()
-            .and_then(|p| p.parent())
+            .parent() // target/
+            .and_then(|p| p.parent()) // src-tauri/
+            .and_then(|p| p.parent()) // project root/
             .map(|p| p.join("python-worker").join("worker.py"));
 
         if let Some(ref path) = dev_path {
@@ -221,7 +238,11 @@ impl PythonWorker {
             .map_err(|e| format!("Failed to parse response: {} (raw: {})", e, response_line))?;
 
         if let Some(error) = response.error {
-            return Err(format!("Worker error [{}]: {}", error.code, error.message));
+            let msg = match error.data {
+                Some(data) => format!("Worker error [{}]: {}\n{}", error.code, error.message, data),
+                None => format!("Worker error [{}]: {}", error.code, error.message),
+            };
+            return Err(msg);
         }
 
         response.result.ok_or("No result in response".to_string())

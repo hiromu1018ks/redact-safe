@@ -85,11 +85,14 @@ for ((i=1; i<=MAX_ITERATIONS; i++)); do
   # Using --output-format text for cleaner output
   result=$(claude -p "$(cat PROMPT.md)" --output-format text 2>&1) || true
 
+  # Normalize line endings (remove \r) for reliable string matching
+  result_clean=$(printf '%s' "$result" | tr -d '\r')
+
   echo "$result"
   echo ""
 
-  # Check for completion signal
-  if [[ "$result" == *"<promise>COMPLETE</promise>"* ]]; then
+  # Check for completion signal (using cleaned result)
+  if [[ "$result_clean" == *"<promise>COMPLETE</promise>"* ]]; then
     echo ""
     echo -e "${GREEN}======================================${NC}"
     echo -e "${GREEN}   ALL TASKS COMPLETE!${NC}"

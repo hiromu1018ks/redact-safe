@@ -8,6 +8,7 @@ Provides:
 """
 
 import io
+import os
 import uuid
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -21,31 +22,47 @@ def _get_paddle_ocr_engine():
     """Lazy-initialize PaddleOCR recognition engine."""
     global _paddle_ocr_engine
     if _paddle_ocr_engine is None:
+        import sys
         from paddleocr import PaddleOCR
-        _paddle_ocr_engine = PaddleOCR(
-            use_angle_cls=True,
-            lang="japan",
-            show_log=False,
-            use_gpu=False,
-            det_db_thresh=0.3,
-            det_db_box_thresh=0.5,
-            det_db_unclip_ratio=1.6,
-        )
+        # Suppress download messages that would corrupt stdout JSON pipe
+        _old_stdout = sys.stdout
+        sys.stdout = sys.stderr
+        try:
+            _paddle_ocr_engine = PaddleOCR(
+                use_angle_cls=True,
+                lang="japan",
+                show_log=False,
+                use_gpu=False,
+            )
+        finally:
+            sys.stdout = _old_stdout
     return _paddle_ocr_engine
 
 
 def _get_paddle_layout_engine():
-    """Lazy-initialize PaddleOCR layout analysis engine."""
+    """Lazy-initialize PaddleOCR layout analysis engine. Returns None if unavailable."""
     global _paddle_layout_engine
     if _paddle_layout_engine is None:
-        from paddleocr import PPStructure
-        _paddle_layout_engine = PPStructure(
-            show_log=False,
-            use_gpu=False,
-            layout=True,
-            table=False,
-            ocr=False,
-        )
+        try:
+            import sys
+            from paddleocr import PPStructure
+            # Suppress download messages that would corrupt stdout JSON pipe
+            _old_stdout = sys.stdout
+            sys.stdout = sys.stderr
+            try:
+                _paddle_layout_engine = PPStructure(
+                    show_log=False,
+                    use_gpu=False,
+                    layout=True,
+                    table=False,
+                    ocr=False,
+                )
+            finally:
+                sys.stdout = _old_stdout
+        except Exception:
+            _paddle_layout_engine = False  # Sentinel: tried and failed
+    if _paddle_layout_engine is False:
+        return None
     return _paddle_layout_engine
 
 
@@ -87,8 +104,11 @@ def analyze_layout(
     """Analyze page layout using PaddleOCR PPStructure.
 
     Returns a list of detected layout regions with type and bbox.
+    Returns empty list if layout engine is unavailable.
     """
     engine = _get_paddle_layout_engine()
+    if engine is None:
+        return []
     img = _render_page_to_image(doc, page_num, dpi)
     img_np = _image_to_numpy(img)
 
@@ -98,9 +118,15 @@ def analyze_layout(
     for item in result:
         bbox = item.get("bbox", [])
         if len(bbox) == 4:
-            # bbox is [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
-            xs = [p[0] for p in bbox]
-            ys = [p[1] for p in bbox]
+            # bbox can be [x1, y1, x2, y2] or [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+            if isinstance(bbox[0], (list, tuple)):
+                # [[x1,y1],[x2,y2],[x3,y3],[x4,y4]]
+                xs = [p[0] for p in bbox]
+                ys = [p[1] for p in bbox]
+            else:
+                # [x1, y1, x2, y2]
+                xs = [bbox[0], bbox[2]]
+                ys = [bbox[1], bbox[3]]
             x, y = min(xs), min(ys)
             w, h = max(xs) - x, max(ys) - y
             regions.append({
@@ -237,6 +263,20 @@ def run_ocr_pipeline(
     # Step 2: PaddleOCR text recognition
     text_regions = recognize_text_paddleocr(doc, page_num, dpi)
 
+    # Convert pixel bboxes to PDF point coordinates [x, y, width, height]
+    page = doc[page_num]
+    scale = 72.0 / dpi
+    for region in text_regions:
+        bbox_px = region.get("bbox_px", [])
+        if len(bbox_px) == 4:
+            x, y, w, h = bbox_px
+            region["bbox_pt"] = [
+                round(x * scale, 2),
+                round(y * scale, 2),
+                round(w * scale, 2),
+                round(h * scale, 2),
+            ]
+
     if progress_callback:
         progress_callback("tesseract_check", 2, 3, "低信頼度領域を確認中...")
 
@@ -274,15 +314,19 @@ def run_ocr_pipeline_base64(
     dpi: int = 300,
     password: str = "",
     progress_callback=None,
+    pdf_path: str = "",
 ) -> Dict[str, Any]:
-    """Run the full OCR pipeline on a page from base64-encoded PDF data.
+    """Run the full OCR pipeline on a page from base64-encoded PDF data or file path.
 
     This is the entry point called from the JSON-RPC handler.
     """
     import fitz
 
-    pdf_bytes = __import__("base64").b64decode(pdf_data_b64)
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    if pdf_path and os.path.isfile(pdf_path):
+        doc = fitz.open(pdf_path)
+    else:
+        pdf_bytes = __import__("base64").b64decode(pdf_data_b64)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     if doc.is_encrypted and doc.needs_pass:
         if not doc.authenticate(password):
@@ -300,15 +344,19 @@ def run_layout_analysis_base64(
     page_num: int,
     dpi: int = 300,
     password: str = "",
+    pdf_path: str = "",
 ) -> Dict[str, Any]:
-    """Run layout analysis only on a page from base64-encoded PDF data.
+    """Run layout analysis only on a page from base64-encoded PDF data or file path.
 
     This is the entry point called from the JSON-RPC handler.
     """
     import fitz
 
-    pdf_bytes = __import__("base64").b64decode(pdf_data_b64)
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    if pdf_path and os.path.isfile(pdf_path):
+        doc = fitz.open(pdf_path)
+    else:
+        pdf_bytes = __import__("base64").b64decode(pdf_data_b64)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     if doc.is_encrypted and doc.needs_pass:
         if not doc.authenticate(password):
@@ -543,6 +591,7 @@ def run_text_extraction(
     dpi: int = 300,
     password: str = "",
     progress_callback=None,
+    pdf_path: str = "",
 ) -> Dict[str, Any]:
     """Unified text extraction: tries digital path first, falls back to OCR.
 
@@ -551,8 +600,11 @@ def run_text_extraction(
     """
     import fitz
 
-    pdf_bytes = __import__("base64").b64decode(pdf_data_b64)
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    if pdf_path and os.path.isfile(pdf_path):
+        doc = fitz.open(pdf_path)
+    else:
+        pdf_bytes = __import__("base64").b64decode(pdf_data_b64)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
     if doc.is_encrypted and doc.needs_pass:
         if not doc.authenticate(password):

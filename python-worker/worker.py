@@ -29,17 +29,21 @@ def send_progress(request_id: int, phase: str, current: int, total: int, message
     """Send a progress notification to stderr as a JSON line.
 
     The Rust side reads stderr and forwards these as Tauri events.
+    Silently ignores write errors (stderr may be unavailable in some Windows setups).
     """
-    notification = {
-        "type": "progress",
-        "request_id": request_id,
-        "phase": phase,
-        "current": current,
-        "total": total,
-        "message": message,
-    }
-    sys.stderr.write(json.dumps(notification, ensure_ascii=False) + "\n")
-    sys.stderr.flush()
+    try:
+        notification = {
+            "type": "progress",
+            "request_id": request_id,
+            "phase": phase,
+            "current": current,
+            "total": total,
+            "message": message,
+        }
+        sys.stderr.write(json.dumps(notification, ensure_ascii=True) + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass  # Progress is non-critical
 
 
 # ============================================================
@@ -139,19 +143,25 @@ from pdf_sanitizer import (
 
 
 def _open_pdf(params: dict, allow_encrypted_detection: bool = False):
-    """Open a PDF from base64-encoded data. Returns (doc, pdf_bytes).
+    """Open a PDF from base64-encoded data or file path. Returns (doc, pdf_bytes).
 
     Args:
-        params: Dict with 'pdf_data' (base64) and 'password' keys.
+        params: Dict with 'pdf_data' (base64) or 'pdf_path' (file path) and 'password' keys.
         allow_encrypted_detection: If True, return doc even when password
             is needed but not provided (for analyze_pdf to detect encryption).
     """
     import fitz
 
+    pdf_path = params.get("pdf_path", "")
     pdf_data = params.get("pdf_data", "")
     password = params.get("password", "")
-    pdf_bytes = base64.b64decode(pdf_data)
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    if pdf_path and os.path.isfile(pdf_path):
+        doc = fitz.open(pdf_path)
+        pdf_bytes = open(pdf_path, "rb").read()
+    else:
+        pdf_bytes = base64.b64decode(pdf_data)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     if doc.is_encrypted and not doc.needs_pass:
         pass  # no password needed (owner password set but not required)
     elif doc.is_encrypted and doc.needs_pass:
@@ -313,45 +323,55 @@ def handle_get_version(params: dict) -> dict:
 
 def handle_run_ocr(params: dict, request_id: int = 0) -> dict:
     """Run OCR pipeline on a single page of a PDF."""
+    pdf_path = params.get("pdf_path", "")
     pdf_data_b64 = params.get("pdf_data", "")
     page_num = params.get("page_num", 0)
     dpi = params.get("dpi", 300)
     password = params.get("password", "")
 
-    if not pdf_data_b64:
-        raise ValueError("pdf_data is required")
+    if not pdf_path and not pdf_data_b64:
+        raise ValueError("pdf_path or pdf_data is required")
 
     def progress_cb(phase, current, total, message=""):
         send_progress(request_id, phase, current, total, message)
 
     return run_ocr_pipeline_base64(
-        pdf_data_b64, page_num, dpi, password, progress_callback=progress_cb
+        pdf_data_b64, page_num, dpi, password, progress_callback=progress_cb,
+        pdf_path=pdf_path,
     )
 
 
 def handle_run_layout_analysis(params: dict) -> dict:
     """Run layout analysis on a single page of a PDF."""
+    pdf_path = params.get("pdf_path", "")
     pdf_data_b64 = params.get("pdf_data", "")
     page_num = params.get("page_num", 0)
     dpi = params.get("dpi", 300)
     password = params.get("password", "")
 
-    if not pdf_data_b64:
-        raise ValueError("pdf_data is required")
+    if not pdf_path and not pdf_data_b64:
+        raise ValueError("pdf_path or pdf_data is required")
 
     return run_layout_analysis_base64(
-        pdf_data_b64, page_num, dpi, password
+        pdf_data_b64, page_num, dpi, password, pdf_path=pdf_path
     )
 
 
 def handle_extract_text_digital(params: dict) -> dict:
     """Extract text from a digital PDF page using PyMuPDF text layer."""
+    pdf_path = params.get("pdf_path", "")
     pdf_data_b64 = params.get("pdf_data", "")
     page_num = params.get("page_num", 0)
     password = params.get("password", "")
 
-    if not pdf_data_b64:
-        raise ValueError("pdf_data is required")
+    if not pdf_path and not pdf_data_b64:
+        raise ValueError("pdf_path or pdf_data is required")
+
+    # extract_text_digital_base64 doesn't support pdf_path yet, convert if needed
+    if pdf_path and not pdf_data_b64:
+        import base64 as b64mod
+        with open(pdf_path, "rb") as f:
+            pdf_data_b64 = b64mod.b64encode(f.read()).decode("ascii")
 
     return extract_text_digital_base64(
         pdf_data_b64, page_num, password
@@ -360,19 +380,21 @@ def handle_extract_text_digital(params: dict) -> dict:
 
 def handle_run_text_extraction(params: dict, request_id: int = 0) -> dict:
     """Unified text extraction: digital path first, OCR fallback."""
+    pdf_path = params.get("pdf_path", "")
     pdf_data_b64 = params.get("pdf_data", "")
     page_num = params.get("page_num", 0)
     dpi = params.get("dpi", 300)
     password = params.get("password", "")
 
-    if not pdf_data_b64:
-        raise ValueError("pdf_data is required")
+    if not pdf_path and not pdf_data_b64:
+        raise ValueError("pdf_path or pdf_data is required")
 
     def progress_cb(phase, current, total, message=""):
         send_progress(request_id, phase, current, total, message)
 
     return run_text_extraction(
-        pdf_data_b64, page_num, dpi, password, progress_callback=progress_cb
+        pdf_data_b64, page_num, dpi, password, progress_callback=progress_cb,
+        pdf_path=pdf_path,
     )
 
 
@@ -467,6 +489,7 @@ def handle_detect_pii(params: dict) -> dict:
 
 def handle_detect_pii_pdf(params: dict, request_id: int = 0) -> dict:
     """Detect PII from a PDF page (combines text extraction + detection)."""
+    pdf_path = params.get("pdf_path", "")
     pdf_data_b64 = params.get("pdf_data", "")
     page_num = params.get("page_num", 0)
     enabled_types = params.get("enabled_types", None)
@@ -475,8 +498,8 @@ def handle_detect_pii_pdf(params: dict, request_id: int = 0) -> dict:
     enable_name_detection = params.get("enable_name_detection", True)
     custom_rules_dir = params.get("custom_rules_dir", None)
 
-    if not pdf_data_b64:
-        raise ValueError("pdf_data is required")
+    if not pdf_path and not pdf_data_b64:
+        raise ValueError("pdf_path or pdf_data is required")
 
     def progress_cb(phase, current, total, message=""):
         send_progress(request_id, phase, current, total, message)
@@ -490,6 +513,7 @@ def handle_detect_pii_pdf(params: dict, request_id: int = 0) -> dict:
         enable_name_detection=enable_name_detection,
         custom_rules_dir=custom_rules_dir,
         progress_callback=progress_cb,
+        pdf_path=pdf_path,
     )
 
 
@@ -896,8 +920,11 @@ def process_message(line: str):
 def main():
     """Main loop: read JSON-RPC messages from stdin, write responses to stdout."""
     # Signal ready state
-    sys.stderr.write("RedactSafe Python Worker started\n")
-    sys.stderr.flush()
+    try:
+        sys.stderr.write("RedactSafe Python Worker started\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
 
     try:
         for line in sys.stdin:

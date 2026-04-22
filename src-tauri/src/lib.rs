@@ -626,10 +626,12 @@ fn get_document_summary(state: State<DocumentState>) -> Result<Option<serde_json
 // --- PDF Analysis Commands ---
 
 /// Analyze a PDF file via Python worker: detect encryption, signatures, page info.
+/// Accepts either a file path (preferred) or base64-encoded data.
 #[tauri::command]
 fn analyze_pdf(
     state: State<WorkerState>,
-    pdf_data_base64: String,
+    file_path: Option<String>,
+    pdf_data_base64: Option<String>,
     password: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -637,10 +639,17 @@ fn analyze_pdf(
         .as_mut()
         .ok_or("Python worker not initialized")?;
 
-    let params = serde_json::json!({
-        "pdf_data": pdf_data_base64,
-        "password": password.unwrap_or_default(),
-    });
+    let params = if let Some(path) = file_path {
+        serde_json::json!({
+            "pdf_path": path,
+            "password": password.unwrap_or_default(),
+        })
+    } else {
+        serde_json::json!({
+            "pdf_data": pdf_data_base64.unwrap_or_default(),
+            "password": password.unwrap_or_default(),
+        })
+    };
 
     let result = worker.call("analyze_pdf", Some(params))?;
     Ok(result)
@@ -650,7 +659,8 @@ fn analyze_pdf(
 #[tauri::command]
 fn decrypt_pdf(
     state: State<WorkerState>,
-    pdf_data_base64: String,
+    file_path: Option<String>,
+    pdf_data_base64: Option<String>,
     password: String,
 ) -> Result<serde_json::Value, String> {
     let mut guard = state.0.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -658,10 +668,14 @@ fn decrypt_pdf(
         .as_mut()
         .ok_or("Python worker not initialized")?;
 
-    let params = serde_json::json!({
-        "pdf_data": pdf_data_base64,
+    let mut params = serde_json::json!({
         "password": password,
     });
+    if let Some(path) = file_path {
+        params["pdf_path"] = serde_json::json!(path);
+    } else {
+        params["pdf_data"] = serde_json::json!(pdf_data_base64.unwrap_or_default());
+    }
 
     let result = worker.call("decrypt_pdf", Some(params))?;
     Ok(result)
@@ -673,7 +687,8 @@ fn decrypt_pdf(
 #[tauri::command]
 fn run_ocr(
     state: State<WorkerState>,
-    pdf_data_base64: String,
+    file_path: Option<String>,
+    pdf_data_base64: Option<String>,
     page_num: u32,
     dpi: Option<u32>,
     password: Option<String>,
@@ -683,12 +698,16 @@ fn run_ocr(
         .as_mut()
         .ok_or("Python worker not initialized")?;
 
-    let params = serde_json::json!({
-        "pdf_data": pdf_data_base64,
+    let mut params = serde_json::json!({
         "page_num": page_num,
         "dpi": dpi.unwrap_or(300),
         "password": password.unwrap_or_default(),
     });
+    if let Some(path) = file_path {
+        params["pdf_path"] = serde_json::json!(path);
+    } else {
+        params["pdf_data"] = serde_json::json!(pdf_data_base64.unwrap_or_default());
+    }
 
     let result = worker.call("run_ocr", Some(params))?;
     Ok(result)
@@ -746,7 +765,8 @@ fn extract_text_digital(
 #[tauri::command]
 fn run_text_extraction(
     state: State<WorkerState>,
-    pdf_data_base64: String,
+    file_path: Option<String>,
+    pdf_data_base64: Option<String>,
     page_num: u32,
     dpi: Option<u32>,
     password: Option<String>,
@@ -756,12 +776,16 @@ fn run_text_extraction(
         .as_mut()
         .ok_or("Python worker not initialized")?;
 
-    let params = serde_json::json!({
-        "pdf_data": pdf_data_base64,
+    let mut params = serde_json::json!({
         "page_num": page_num,
         "dpi": dpi.unwrap_or(300),
         "password": password.unwrap_or_default(),
     });
+    if let Some(path) = file_path {
+        params["pdf_path"] = serde_json::json!(path);
+    } else {
+        params["pdf_data"] = serde_json::json!(pdf_data_base64.unwrap_or_default());
+    }
 
     let result = worker.call("run_text_extraction", Some(params))?;
     Ok(result)
@@ -835,7 +859,8 @@ fn detect_pii(
 #[tauri::command]
 fn detect_pii_pdf(
     state: State<WorkerState>,
-    pdf_data_base64: String,
+    file_path: Option<String>,
+    pdf_data_base64: Option<String>,
     page_num: u32,
     enabled_types: Option<Vec<String>>,
     rules_path: Option<String>,
@@ -848,8 +873,7 @@ fn detect_pii_pdf(
         .as_mut()
         .ok_or("Python worker not initialized")?;
 
-    let params = serde_json::json!({
-        "pdf_data": pdf_data_base64,
+    let mut params = serde_json::json!({
         "page_num": page_num,
         "enabled_types": enabled_types,
         "rules_path": rules_path,
@@ -857,6 +881,11 @@ fn detect_pii_pdf(
         "enable_name_detection": enable_name_detection.unwrap_or(true),
         "custom_rules_dir": custom_rules_dir,
     });
+    if let Some(path) = file_path {
+        params["pdf_path"] = serde_json::json!(path);
+    } else {
+        params["pdf_data"] = serde_json::json!(pdf_data_base64.unwrap_or_default());
+    }
 
     let result = worker.call("detect_pii_pdf", Some(params))?;
     Ok(result)
@@ -1193,7 +1222,7 @@ pub fn run() {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
+                        .level(log::LevelFilter::Debug)
                         .build(),
                 )?;
             }

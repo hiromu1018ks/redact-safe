@@ -505,13 +505,14 @@ def detect_pii_base64(
     enable_name_detection=True,
     custom_rules_dir=None,
     progress_callback=None,
+    pdf_path="",
 ):
     """Detect PII from text extraction results for a PDF page.
 
     JSON-RPC entry point that combines text extraction and PII detection.
 
     Args:
-        pdf_data_b64: Base64-encoded PDF data.
+        pdf_data_b64: Base64-encoded PDF data (ignored if pdf_path is provided).
         page_num: Page number (0-indexed).
         text_regions: Optional pre-extracted text regions.
                      If None, extracts text from PDF automatically.
@@ -521,6 +522,7 @@ def detect_pii_base64(
         enable_name_detection: Whether to enable MeCab-based name detection.
         custom_rules_dir: Optional path to custom rules directory.
         progress_callback: Optional callable(phase, current, total, message) for progress.
+        pdf_path: Optional file path to open PDF directly (avoids base64 overhead).
 
     Returns:
         Dict with 'detections', 'region_count', 'detection_count'.
@@ -535,7 +537,8 @@ def detect_pii_base64(
             progress_callback("text_extraction", 0, 2, "テキスト抽出中...")
 
         extraction_result = run_text_extraction(
-            pdf_data_b64, page_num, 300, password, progress_callback=progress_callback
+            pdf_data_b64, page_num, 300, password, progress_callback=progress_callback,
+            pdf_path=pdf_path,
         )
         text_regions = extraction_result.get("text_regions", [])
 

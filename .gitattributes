@@ -1,0 +1,29 @@
+# Shell scripts must use LF line endings (even on Windows)
+*.sh text eol=lf
+
+# Python files use LF
+*.py text eol=lf
+
+# Rust and JS/TS use LF
+*.rs text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.jsx text eol=lf
+*.tsx text eol=lf
+
+# Config files
+*.json text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+
+# Binary files
+*.exe binary
+*.msi binary
+*.png binary
+*.jpg binary
+*.pdf binary

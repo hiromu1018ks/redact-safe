@@ -6,3 +6,5 @@ target
 CLAUDE.md
 clerk-nextjs-guide
 .cache/
+.venv/
+.playwright-mcp/
