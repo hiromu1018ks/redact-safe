@@ -1,174 +1,70 @@
-# RedactSafe - Product Requirements Document
+# RedactSafe - 改善版 Product Requirements Document (v2)
 
 ## Overview
 
-**RedactSafe** は、行政機関の職員が安全かつ効率的にPDF文書の黒塗り（墨消し）処理を行うためのデスクトップアプリケーションである。
+**RedactSafe** v1の全27タスクが完了した後、コードレビューに基づく改善を実施する。以下の3分野を対象とする。
 
-情報公開請求・開示請求への対応業務において、個人情報・機密情報を含む文書の一部を黒塗り処理したうえで開示する業務を支援する。「編集可能な仮マスキング（可逆）」と「不可逆な確定マスキング（完全削除）」の2段階設計により、実務フローへの適合と情報セキュリティの両立を実現する。
+1. **OCR/検出パイプライン** — 精度向上、メモリ効率改善、バグ修正
+2. **UI/UX操作性** — アクセシビリティ、安定性、コード保守性
+3. **性能・安定性** — メモリ管理、プロセス管理、エラーハンドリング
 
 ## Target Audience
 
-| 利用者区分 | ロール | ITリテラシー |
-|-----------|--------|-------------|
-| 一般行政職員（担当者） | 編集者 | 中程度（Office操作可） |
-| 管理職・決裁者 | 確認者 / 確定実行者 | 低〜中程度 |
-| 情報システム担当 | 管理者 | 高い |
+v1と同じ（行政職員・管理職・情報システム担当）
 
 ## Core Features
 
-1. **PDF入出力** - 暗号化PDF・署名付きPDF対応、ドラッグ&ドロップ読込
-2. **レイアウト解析・OCR** - PaddleOCR（主）/ Tesseract（補助）、デジタルPDFはテキスト抽出経路
-3. **自動検出** - 正規表現 + MeCab形態素解析によるPII/機密情報検出、カスタムルール対応
-4. **仮マスキング（Phase 1）** - UIオーバーレイによる編集可能な黒矩形、ON/OFF・移動・リサイズ・追加・削除
-5. **確定マスキング（Phase 2）** - 300dpi画像化→黒塗り焼き込み→PDF再生成、hidden data完全除去
-6. **状態管理・ロール制御** - draft/confirmed/finalized状態遷移、3ロール権限制御
-7. **監査ログ** - JSON-Lines形式、ハッシュチェーンによる改ざん検知
+v1の機能に加え、以下の改善を実装する。
+
+1. **セキュリティ修正** — ハードコードされたパスワード除去、トレースバック漏洩防止
+2. **メモリ最適化** — 大容量PDFのbase64廃止、ページ再描画の統合
+3. **OCR精度向上** — マイナンバー/法人番号のチェックデジット検証、重複検出の排除
+4. **プロセス管理改善** — PythonワーカーのDrop実装、自動再起動、タイムアウト
+5. **アクセシビリティ改善** — ARIA属性、フォーカストラップ、WCAG準拠
+6. **UI安定性** — Undoのページ跨ぎ問題修正、alert()廃止、モジュール分割
 
 ## Tech Stack
 
-- **デスクトップFW**: Tauri v2 (Rust)
-- **フロントエンド**: Vanilla JS + HTML/CSS (WebView2)
-- **PDF表示**: PDF.js
-- **バックエンド**: Rust (Tauri Core) - ファイルIO、状態管理、ログ、IPC
-- **OCR/処理**: Python (ローカルサブプロセス) - PaddleOCR, Tesseract, MeCab, Pillow, PyMuPDF
-- **Python配布**: PyInstaller同梱 (standalone実行形式)
-- **座標系**: PDF point (1pt = 1/72 inch) を正規座標
-- **スタイリング**: カスタムCSS (Tailwind等のフレームワーク不使用)
-- **認証**: なし (暫定: OSログイン名による本人識別)
-- **ホスティング**: ローカルデスクトップアプリ (オフライン動作)
+v1と同じ（変更なし）
 
 ## Architecture
 
-```
-Tauri Desktop App
-├── Frontend (Vanilla JS / WebView2)
-│   ├── UIレンダリング
-│   ├── 仮マスキングオーバーレイ (Canvas API)
-│   ├── PDF表示 (PDF.js)
-│   ├── ウォーターマーク
-│   └── 状態表示・遷移UI
-├── Rust Core (Tauri Backend)
-│   ├── ファイルI/O
-│   ├── 状態管理 (JSON)
-│   ├── JS⇔Rust IPC (Tauri Command)
-│   ├── Rust⇔Python IPC (stdin-stdout)
-│   ├── ログ記録 (JSON-Lines)
-│   └── セキュリティ検証
-└── Python Worker (ローカルサブプロセス)
-    ├── レイアウト解析 (PaddleOCR Layout)
-    ├── 文字認識 (PaddleOCR / Tesseract)
-    ├── bbox出力・座標変換
-    ├── PII検出 (正規表現 + MeCab)
-    ├── 確定マスキング処理 (Pillow / PyMuPDF)
-    └── hidden data除去
-```
-
-### 処理フロー
-
-```
-[入力PDF]
-  → [レイアウト解析] (PaddleOCR)
-  → [文字認識] (PaddleOCR / テキスト抽出)
-  → [bbox出力] (PDF point座標正規化)
-  → [PII自動検出] (正規表現 + MeCab)
-  → [仮マスキング生成] (UIオーバーレイ)
-  → [ユーザー確認・修正] (ON/OFF・位置調整・手動追加)
-  → [確認者承認] (confirmed状態)
-  → [確定マスキング] (300dpi画像化→黒塗り焼き込み)
-  → [hidden dataサニタイズ]
-  → [安全PDF出力]
-  → [ログ保存]
-```
+v1と同じ（変更なし）
 
 ## Data Model
 
-### マスキング設定ファイル (JSON)
-
-```json
-{
-  "schema_version": "1.2",
-  "document_id": "uuid-v4",
-  "source_file": "path/to/file.pdf",
-  "source_hash": "sha256:...",
-  "status": "draft",
-  "revision": 1,
-  "confirmed_by": null,
-  "finalized_by": null,
-  "coordinate_system": { "unit": "pdf_point", "origin": "top-left", "dpi_for_rasterize": 300 },
-  "history": [],
-  "pages": [
-    {
-      "page": 1,
-      "width_pt": 595.28,
-      "height_pt": 841.89,
-      "rotation_deg": 0,
-      "text_extraction_path": "ocr",
-      "regions": [
-        {
-          "id": "region-uuid",
-          "bbox": [x, y, width, height],
-          "type": "name",
-          "confidence": 0.92,
-          "enabled": true,
-          "source": "auto",
-          "note": ""
-        }
-      ]
-    }
-  ]
-}
-```
-
-### ログファイル (JSON-Lines)
-
-```json
-{"timestamp": "...", "event": "file_opened", "user": "...", "prev_hash": "...", "data": {...}}
-```
+v1と同じ（変更なし）
 
 ## UI/UX Requirements
 
-- **レイアウト**: 左サイドバー（検出一覧パネル）+ 右メイン（PDFビューエリア）
-- **警告バナー**: 「自動検出には漏れがある可能性があります。全ページを目視で確認してください」を常時表示
-- **ウォーターマーク**: 「未確定 - 公開禁止」を半透明赤・45度斜めで表示
-- **確定確認ダイアログ**: マスキング件数・対象ページ数を明示し「この操作は元に戻せません」警告
-- **マスキング矩形表示**: 不透明黒(#000000)、選択時赤枠(#FF0000)、OFF時半透明グレー50%
-- **アクセシビリティ**: フォントサイズ3段階、Tooltip、キーボード完結操作
-- **キーボードショートカット**: 主要操作に割り当て、Ctrl+ZによるUndo
+v1に加え、以下を改善する。
+
+- WCAG AA準拠のフォントサイズ（最小12px）とコントラスト比（4.5:1以上）
+- 全モーダルダイアログにARIA属性とフォーカストラップを実装
+- メニューバーにARIA属性を実装
+- alert()を独自トースト/ダイアログに置き換え
+- サイドバーの折りたたみ機能を追加
+- main.jsを複数モジュールに分割
 
 ## Security Considerations
 
-- **ローカル完結**: 全てのデータ処理をローカルで行い、外部ネットワークに送信しない
-- **2段階マスキング**: 仮マスキングはPDF本体を変更せず、確定処理のみ不可逆処理
-- **hidden data完全除去**: メタデータ、注釈、添付、フォーム、JS、ブックマーク、隠しレイヤー
-- **状態遷移制約**: draft/confirmed状態ではファイル出力・印刷の全導線を無効化
-- **ログ改ざん防止**: ハッシュチェーン方式、日次ルートハッシュの別保管
-- **一時ファイル安全削除**: 処理完了後に確実に削除
-- **座標精度**: bbox各辺に最低3ptマージン、受入基準±2pt以内
+v1に加え、以下を修正する。
 
-## Third-Party Integrations
-
-なし（完全オフライン動作）。外部API・クラウドサービスへの接続は一切行わない。
+- PDFオーナーパスワードをランタイム生成に変更（ハードコード廃止）
+- エラーレスポンスに内部パスやトレースバックを含めない
+- page_num等の入力値をバリデーションする
 
 ## Constraints & Assumptions
 
-- **対象OS**: Windows 10 / 11 (64bit) のみ
-- **オフライン前提**: インターネット接続不要
-- **低スペック対応**: Core i5 第8世代相当 / メモリ8GB ベースライン
-- **メモリ制御**: 1ページずつ逐次処理、全ページ同時画像化禁止
-- **PDFのみ入力**: 画像ファイル（JPEG/PNG等）の直接入力は不可
-- **日本語前提**: 入力PDFは日本語文書を主対象
-- **インストーラー**: MSI/EXE形式、WebView2ランタイム同梱、Python同梱
+v1と同じ（変更なし）
 
 ## Success Criteria
 
-1. 安全PDFからテキスト抽出結果が0文字であること
-2. PDFオブジェクト全走査でhidden dataが完全に除去されていること
-3. OCR精度が標準300dpiで90%以上（CER ≦ 10%）
-4. 自動検出のRecallが85%以上、False Positive Rateが20%以下
-5. 座標精度が±2pt以内
-6. 10ページ処理がOCR 60秒以内・確定処理30秒以内
-7. 50ページPDFを10回連続処理でクラッシュなし
-8. オフライン環境で全機能が動作
+1. 100MBのPDFで確定処理がOOMクラッシュしないこと
+2. Pythonワーカー異常終了後に自動再起動すること
+3. マイナンバー/法人番号の誤検出率が大幅に低下すること
+4. 全モーダルでキーボード操作が完全に機能すること
+5. main.jsのモジュール分割により各ファイルが1000行以下であること
 
 ---
 
@@ -177,374 +73,288 @@ Tauri Desktop App
 ```json
 [
   {
-    "category": "setup",
-    "description": "Tauri v2プロジェクトの初期化とRust/JS/Pythonのディレクトリ構造を構築する",
+    "category": "security",
+    "description": "ハードコードされたPDFオーナーパスワードをランタイム生成に変更する",
     "steps": [
-      "cargo create-tauri-app redact-safe --template vanilla を実行しTauri v2プロジェクトを作成",
-      "プロジェクト構造を設定: src-tauri/ (Rust), src/ (Vanilla JS frontend), python-worker/ (Python)",
-      "mise.tomlにRust toolchainを設定済みであることを確認",
-      "cargo build でRustコアがコンパイル可能であることを確認",
-      "npm install でフロントエンド開発環境が動作することを確認"
+      "worker.pyとpdf_sanitizer.pyからハードコードされたパスワード 'RedactSafe_Owner_2024!' を削除",
+      "ランダムパスワードをsecrets.token_urlsafe()で生成しメモリのみに保持する実装に変更",
+      "出力PDFのユーザーパスワードは空（誰でも開ける）、オーナーパスワードのみで制限をかける方式を維持",
+      "確定処理後にパスワードをメモリから明示的に削除",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
     "passes": true
   },
   {
-    "category": "setup",
-    "description": "Pythonワーカーの依存関係を設定し、基本的なstdin/stdout通信を確立する",
+    "category": "security",
+    "description": "Pythonワーカーのエラーレスポンスからトレースバックと内部パスを除去する",
     "steps": [
-      "python-worker/ ディレクトリを作成しrequirements.txtを配置（PyMuPDF, Pillow, PaddleOCR, MeCab, pyyaml）",
-      "Pythonワーカーのエントリポイント worker.py を作成し、stdin/stdoutベースのJSON-RPC通信プロトコルを実装",
-      "Rust側からPythonワーカープロセスを起動しpingコマンドで通信確認するTauriコマンドを実装",
-      "フロントエンドからRust経由でPythonワーカーにpingを送り応答を確認するテストUIを作成",
-      "dev serverを起動して通信が確立されていることをブラウザで確認"
+      "worker.pyのprocess_message()でtraceback.format_exc()をエラーレスポンスに含めている箇所を修正",
+      "エラーメッセージを 'Internal error' のみにし、dataフィールドにスタックトレースを含めない",
+      "page_numパラメータのバリデーションを全ハンドラに追加（0以上、page_count以下）",
+      "負のpage_numや異常に大きなpage_numが渡された場合は 'Invalid page number' エラーを返す",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "setup",
-    "description": "JSON-Lines形式のロギングシステムとハッシュチェーンを実装する",
+    "category": "performance",
+    "description": "大容量PDFのIPC通信をbase64からファイルパスベースに変更する",
     "steps": [
-      "Rust側にJSON-Linesログ出力モジュールを実装（ローテーション対応）",
-      "各ログレコードに前レコードのSHA-256ハッシュを含めるハッシュチェーンを実装",
-      "日次ルートハッシュを別ファイルに保存する機能を実装",
-      "ログ保存先を %APPDATA%/RedactSafe/logs/ に設定",
-      "Tauriコマンド経由でログ記録を呼び出せるようにする"
+      "lib.rsのfinalize_masking_pdfコマンドでPDFをbase64で送信するのをやめ、一時ファイルパスを渡す方式に変更",
+      "worker.pyのhandle_finalize_maskingでpdf_data_b64の代わりにpdf_pathを受け取れるように修正",
+      "lib.rsのread_file_as_base64/save_base64_to_fileに100MBのサイズ制限を追加",
+      "フロントエンドのmain.jsで確定処理時にPDFをbase64エンコードせずパスを渡すように変更",
+      "handle_extract_text_digitalでpdf_pathが渡された場合にbase64エンコードをスキップするように修正",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "setup",
-    "description": "JSONベースの状態管理システムと座標系ユーティリティを実装する",
+    "category": "performance",
+    "description": "OCRパイプラインで同一ページの再描画を1回に統合する",
     "steps": [
-      "Rust側にマスキング設定ファイル（JSON）のCRUD操作モジュールを実装",
-      "schema_version, document_id, source_hash, status, pages等のデータ構造を定義",
-      "状態遷移ロジック（draft→confirmed→finalized）をRust側に実装",
-      "Python側に座標変換ユーティリティ（PDF point ↔ pixel）を実装",
-      "ページ回転補正関数（0°/90°/180°/270°）をPython側に実装",
-      "座標変換の単体テストを作成し正確性を確認"
+      "ocr_pipeline.pyの_render_page_to_image()を呼び出している箇所を特定（analyze_layout, recognize_text_paddleocr, recognize_text_tesseract）",
+      "run_ocr_pipeline()でページ画像を1回だけレンダリングし、全ステップに同じPIL Imageを渡すように変更",
+      "PNG encode/decodeのラウンドトリップを排除：pix.samplesから直接PIL Imageを構築（Image.frombytes）",
+      "低信頼度領域のTesseractフォールバックでも再描画しないことを確認",
+      "Python単体テストでレンダリング回数が1回/pageになることを確認",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "PDF.jsによるPDFビューアーとマルチページナビゲーションを実装する",
+    "category": "performance",
+    "description": "secure_delete_fileをSSD最適化し、不要な3パス書き込みを削除する",
     "steps": [
-      "PDF.jsをフロントエンドに導入しTauri WebView内でPDFをレンダリング",
-      "ページ切替UI（前ページ/次ページボタン、ページ番号表示）を実装",
-      "ページのズームイン/ズームアウト機能を実装",
-      "PDF.jsのレンダリング座標系とアプリのPDF point座標系の対応を確認",
-      "10ページのテストPDFでページ切替が正常動作することを確認"
+      "worker.pyのsecure_delete_file()で3パス（ゼロ・ランダム・ゼロ）書き込みを1パス（ゼロのみ）に変更",
+      "SSD環境では複数回書き込みが逆効果（ウェアレベリング・寿命短縮）であることをコメントで記載",
+      "os.fsync()は1回のみ呼び出す",
+      "一時ファイルがメモリ上のみの場合はファイル書き込み自体をスキップする条件を追加",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "ファイル入力機能（ファイルピッカー・ドラッグ&ドロップ・暗号化PDF・署名付きPDF）を実装する",
+    "category": "stability",
+    "description": "PythonWorkerにDropを実装し、ゾンビプロセスを防止する",
     "steps": [
-      "ファイルメニューからPDFファイルを選択するファイルピッカーを実装",
-      "ドラッグ&ドロップによるPDF読込を実装",
-      "暗号化PDF検出時にパスワード入力ダイアログを表示する機能を実装",
-      "署名付きPDF検出時に警告ダイアログを表示する機能を実装",
-      "PyMuPDFでPDFメタデータ（暗号化・署名の有無）を検出するPythonワーカー機能を実装",
-      "PDF読込時にログ記録（file_openedイベント）されることを確認"
+      "python_worker.rsのPythonWorker構造体にimpl Dropを追加",
+      "drop()でstderr_stopフラグをtrueに設定し、child.kill()とchild.wait()を呼び出す",
+      "BufReaderをPythonWorker構造体に保持し、call()ごとに再作成しないように変更",
+      "WorkerStateのMutexがdropされた時に自動的にプロセスが終了することを確認",
+      "cargo test、cargo clippyが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "PaddleOCRによるレイアウト解析・文字認識パイプラインを実装する",
+    "category": "stability",
+    "description": "Pythonワーカーの異常終了時に自動再起動するメカニズムを実装する",
     "steps": [
-      "PythonワーカーにPaddleOCR Layout Analysis統合を実装",
-      "各ページを領域（段落・表・図・ヘッダ）に分類する機能を実装",
-      "分類結果をJSON形式で出力する機能を実装",
-      "PaddleOCR文字認識モジュールによるテキスト・bbox抽出を実装",
-      "信頼スコア < 0.5 の場合にTesseractフォールバックする機能を実装",
-      "テストスキャンPDF（300dpi）でレイアウト解析・OCR結果を確認"
+      "lib.rsのworker_get_statusまたは各ワーカーコマンドの実行前にプロセス生存チェックを追加",
+      "プロセスが終了している場合は自動的にPythonWorker::spawn()で再起動",
+      "cancel_worker実行後も次回コマンド実行時に自動再起動することを確認",
+      "再起動時にinfoレベルのログを記録",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "デジタルネイティブPDFのテキスト抽出経路（PyMuPDF）を実装する",
+    "category": "stability",
+    "description": "Pythonワーカーのcall()にタイムアウトを追加し、WorkerStateのMutexを改善する",
     "steps": [
-      "PyMuPDFで各ページのテキストレイヤー有無を判定する機能を実装",
-      "テキストが存在する場合は文字クワッド（character quad）からbboxを取得する機能を実装",
-      "テキスト抽出経路のconfidenceを1.0固定とする",
-      "テキスト抽出失敗時はOCR経路にフォールバックする処理を実装",
-      "デジタルPDFのテストファイルでテキスト抽出が正常動作することを確認"
+      "python_worker.rsのcall()メソッドにタイムアウト（デフォルト5分、確定処理は10分）を追加",
+      "タイムアウト時にプロセスをkillしエラーを返す",
+      "inspect.signature()の結果を起動時にキャッシュし、毎回の呼び出しを回避（PROGRESS_HANDLERSセットの作成）",
+      "WorkerStateのMutexが長時間のOCR/確定処理中にcancel_workerをブロックしないように、call()を別スレッドで実行する方式を検討",
+      "cargo test、cargo clippyが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "bbox出力の正規化（座標変換・行統合・回転補正）を実装する",
+    "category": "stability",
+    "description": "Windowsでのアトミックセーブを修正し、on_window_eventでルートハッシュを保存する",
     "steps": [
-      "OCR結果のピクセル座標をPDF point座標に変換する機能を実装",
-      "近接するbboxを行単位でグルーピングし最小外接矩形で統合する機能を実装",
-      "ページ回転（90°/180°/270°）に対するbbox回転補正を実装",
-      "bbox統合後の結果がJSON形式で正しく出力されることを確認",
-      "回転付きテストPDFで回転補正が正しく動作することを確認"
+      "document_state.rsのsave_to_file()でWindows POSIX renameの問題を修正：fs::hard_link + remove_fileパターンを使用",
+      "lib.rsのon_window_eventハンドラでアプリ終了時にsave_current_day_root_hash()を呼び出す",
+      "load_from_file()にファイルサイズ上限（100MB）を追加",
+      "can_recover()でファイル全体を読まず先頭数KBのみでJSON妥当性チェックするように変更",
+      "cargo test、cargo clippyが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "正規表現によるPII自動検出エンジンを実装する",
+    "category": "stability",
+    "description": "正規表現のタイムアウトをスレッドベースで実装し、ルール読込をキャッシュする",
     "steps": [
-      "住所検出（都道府県〜番地パターン）の正規表現を実装",
-      "電話番号検出（市外局番パターン）の正規表現を実装",
-      "マイナンバー検出（12桁数字）の正規表現を実装",
-      "メールアドレス検出（RFC準拠パターン）の正規表現を実装",
-      "生年月日検出（和暦・西暦両対応）の正規表現を実装",
-      "法人番号検出（13桁数字）の正規表現を実装",
-      "デフォルト検出ルールをYAMLファイルとして定義・読込を実装",
-      "テストテキストで各検出パターンの動作を確認"
+      "pii_detector.pyのdetect_pii()でregex matchingをThreadPoolExecutorで実行し、REGEX_TIMEOUT_SECONDSでタイムアウトさせる",
+      "タイムアウト時はそのルールの結果を空として扱い、警告をstderrに出力",
+      "detect_pii()にrulesパラメータがNoneの場合、初回のみload_rules()を呼び出し結果をキャッシュする",
+      "worker.pyの_open_pdf()でファイルハンドルをwith文で適切にクローズする",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "MeCabによる氏名検出とカスタム検出ルールシステムを実装する",
+    "category": "detection",
+    "description": "マイナンバー・法人番号のチェックデジット検証を追加し誤検出を削減する",
     "steps": [
-      "MeCab + UniDicの形態素解析による氏名（固有名詞）検出を実装",
-      "検出結果に検出種別・信頼スコアを付与する機能を実装",
-      "カスタム検出ルール（YAML/JSON）の読込・スキーマ検証を実装",
-      "正規表現の安全性チェック（catastrophic backtracking検出）を実装",
-      "本体同梱ルールとカスタムルールのファイル分離を実装",
-      "テストテキストで氏名検出が動作することを確認"
+      "pii_detector.pyにvalidate_my_number(digits)関数を追加：12桁のチェックデジット（mod 11）を検証",
+      "pii_detector.pyにvalidate_corporate_number(digits)関数を追加：13桁のチェックデジットを検証",
+      "detection_rules.yamlのマイナンバーパターンをカスタムバリデータ付きに変更",
+      "detection_rules.yamlの法人番号パターンをカスタムバリデータ付きに変更",
+      "PII検出後にバリデーションを実行し、不合格のマッチを除外する処理をdetect_pii()に追加",
+      "テストケースを追加：有効・無効なマイナンバー・法人番号の検出確認",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "OCR・検出処理のプログレス表示を実装する",
+    "category": "detection",
+    "description": "電話番号パターンの網羅性を向上し、MeCab氏名検出との重複を排除する",
     "steps": [
-      "Pythonワーカーからページ単位の進捗をIPC経由でフロントエンドに通知する機能を実装",
-      "フロントエンドにプログレスバー（全体進捗の百分率表示）を実装",
-      "10秒以上更新がない場合に「処理が停止している可能性があります」を表示する機能を実装",
-      "キャンセルボタンからキャンセル要求→1秒以内にUIが反応することを確認",
-      "OCR処理がバックグラウンドスレッドで実行されUIスレッドをブロックしないことを確認"
+      "detection_rules.yamlの電話番号パターンにカッコ書き（03）1234-5678、スペース区切り 0120 123 456 を追加",
+      "name_detector.pyのhonorificsリストから重複する'氏'を削除",
+      "pii_detector.pyのdetect_pii()でMeCab名前検出と正規表現検出の重複排除を追加（IoUベースでbboxが重複する場合は信頼度の高い方を優先）",
+      "住所パターンの30文字制限を緩和し、行境界を超えないよう改行文字で区切る",
+      "生年月日パターンで99月99日等の不正日付を除外するバリデーションを追加",
+      "テストケースを追加：新しい電話番号形式、重複排除、不正日付の確認",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "OCR・検出処理のプログレス表示を実装する（重複）",
+    "category": "detection",
+    "description": "回転変換コードを単一実装に統一し、レイアウト解析結果を活用する",
     "steps": [
-      "Pythonワーカーからページ単位の進捗をIPC経由でフロントエンドに通知する機能を実装",
-      "フロントエンドにプログレスバー（全体進捗の百分率表示）を実装",
-      "10秒以上更新がない場合に「処理が停止している可能性があります」を表示する機能を実装",
-      "キャンセルボタンからキャンセル要求→1秒以内にUIが反応することを確認",
-      "OCR処理がバックグラウンドスレッドで実行されUIスレッドをブロックしないことを確認"
+      "worker.pyの_transform_bbox_for_rotation()をcoord_utils.pyのrotate_bbox()に統合",
+      "worker.pyのhandle_finalize_maskingで統合されたrotate_bbox()を使用するように変更",
+      "ocr_pipeline.pyのrun_ocr_pipeline()でlayout_regionsの結果をテキスト認識に活用する（表領域のOCR優先度を上げる等）",
+      "bbox_normalizer.pyの行マージ閾値に絶対最大ギャップ（例：20pt）を追加し、巨大bboxによる誤統合を防止",
+      "行マージ時のテキスト結合にスペース区切りを追加（word1word2 → word1 word2）",
+      "テストケースを追加：回転統合、行マージ上限、テキスト結合の確認",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "仮マスキングオーバーレイエンジン（Canvas API）を実装する",
+    "category": "detection",
+    "description": "レイアウト解析結果がテキスト認識で活用されない問題を修正する",
     "steps": [
-      "PDFビューア上にCanvas APIでオーバーレイレイヤーを重ねる機能を実装",
-      "自動検出結果のbbox位置に黒矩形(#000000)を描画する機能を実装",
-      "マスキング矩形の選択時に赤枠(#FF0000)で強調表示する機能を実装",
-      "OFF時の矩形を半透明グレー(50%)で表示する機能を実装",
-      "自動検出（青枠）と手動追加（緑枠）の色分け表示を実装",
-      "PDF表示座標とマスキング座標の同期が正しいことを確認"
+      "ocr_pipeline.pyのanalyze_layout()で取得したlayout_regionsをrecognize_text_paddleocr()に渡す",
+      "表（table）として検出された領域ではTesseractフォールバックを優先的に使用するよう変更",
+      "図・画像として検出された領域ではOCRをスキップし手動マスキング対象としてマークする",
+      "layout_regionsの結果を最終的なテキスト抽出結果のメタデータに含める",
+      "テストスキャンPDFでレイアウト解析結果がOCR結果に反映されることを確認",
+      "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "マスキング矩形の操作（ON/OFF・移動・リサイズ・追加・削除）を実装する",
+    "category": "ux",
+    "description": "Undoのページ跨ぎ問題を修正し、一括操作のUndoを追加する",
     "steps": [
-      "各マスキング箇所のON/OFFトグル切替を実装",
-      "マスキング矩形のドラッグによる位置変更を実装",
-      "マスキング矩形のドラッグによるサイズ変更を実装",
-      "ユーザーによる手動マスキング矩形の追加機能を実装",
-      "マスキング箇所の削除機能を実装",
-      "全操作のCtrl+Z Undo対応を実装",
-      "操作のたびにJSON自動保存・操作ログ記録されることを確認"
+      "main.jsのperformUndo()でop.pageNumと現在のcurrentPageが異なる場合、自動的に該当ページに遷移してからUndoを実行する",
+      "undo-manager.jsにbeginMacro()/endMacro()を追加し、一括操作（全てON/OFF）を1つのUndoステップとして扱う",
+      "サイドバーとツールバーの全てON/OFFボタンでbeginMacro/endMacroを使用する",
+      "toggle undoで前のenabled状態を保存し、正確に元に戻せるようにする",
+      "loadPdfWithAnalysis()の開始時にundoManagerをclear()する",
+      "npm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "検出一覧サイドバーパネル・一括操作・フィルタリング・ウォーターマークを実装する",
+    "category": "ux",
+    "description": "全モーダルダイアログにARIA属性・フォーカストラップ・Escapeハンドラを追加する",
     "steps": [
-      "左サイドバーに検出一覧パネルを実装（検出件数・種別表示）",
-      "検出種別（PII種別）によるフィルタリング表示を実装",
-      "全マスキング箇所の一括ON・一括OFF機能を実装",
-      "draft/confirmed状態のPDFビューに「未確定 - 公開禁止」ウォーターマークを表示（半透明赤、45度斜め）",
-      "サイドバーの検出項目クリックで該当箇所にスクロール・ハイライトする機能を実装",
-      "ウォーターマークがfinalized状態で消滅することを確認"
+      "index.htmlの全モーダルダイアログにrole='dialog', aria-modal='true', aria-labelledbyを追加",
+      "メニューバーにrole='menubar', role='menuitem', aria-haspopup, aria-expandedを追加",
+      "main.jsにフォーカストラップユーティリティ（trapFocus）を実装し、全モーダルに適用",
+      "署名付きPDFダイアログと確定実行者警告ダイアログにEscapeキーハンドラを追加",
+      "アイコンのみのボタン（+、-、<<、>>）にaria-labelを追加",
+      "npm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "ドキュメント状態管理（draft/confirmed/finalized）と状態遷移制約を実装する",
+    "category": "ux",
+    "description": "alert()を独自トースト通知に置き換え、サイドバー折りたたみ機能を追加する",
     "steps": [
-      "ドキュメントの3状態（draft/confirmed/finalized）遷移ロジックをRust側に実装",
-      "draft/confirmed状態でファイル出力・印刷の全導線をアプリレベルで無効化",
-      "draft/confirmed状態でドラッグ&ドロップによる外部ファイルドロップを無効化",
-      "confirmed状態では編集操作を無効化（確認者は差し戻しのみ可能）",
-      "finalized状態では安全PDFのファイルパスのみ公開し元PDFのパスは非公開",
-      "状態遷移時にログ記録されることを確認"
+      "main.jsにshowToast(message, type)関数を実装（type: error/warning/info、自動消失3秒）",
+      "index.htmlにトースト通知コンテナ（#toast-container）を追加",
+      "src/styles.cssにトースト通知のスタイル（画面右上固定、スライドインアニメーション）を追加",
+      "全alert()呼び出し（8箇所）をshowToast()に置き換え",
+      "サイドバーに折りたたみボタンを追加し、CSSクラスで表示/非表示を切り替え",
+      "npm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "操作者識別・確認承認フロー・差し戻し機能を実装する",
+    "category": "ux",
+    "description": "WCAG AA準拠のフォントサイズとコントラスト比を修正する",
     "steps": [
-      "OSログイン名をデフォルト識別子として取得する機能を実装",
-      "確認承認時に操作者名の再入力ダイアログを表示する機能を実装",
-      "再入力された操作者名をOSログイン名と共に監査ログ・設定ファイルに記録",
-      "確認者による差し戻し（confirmed→draft）機能を実装",
-      "差し戻し後も直前の承認履歴がhistoryに残存することを確認",
-      "編集者と確定実行者のOSログイン名が同一の場合に警告を表示する機能を実装",
-      "confirmed_by/finalized_byにOSログイン名、display名を併記する機能を実装"
+      "src/styles.cssのステータスバーテキストを11px→12pxに変更",
+      "ステータスバッジを10px→11pxに変更",
+      "サイドバーのプレースホルダー #999 on #f5f5f5 を #666 on #f5f5f5 に変更してコントラスト4.5:1以上を確保",
+      "リージョンメタ情報の #888 on #fff を #666 on #fff に変更",
+      "フィルターセレクトのfocusスタイルにoutline: 2px solid #4a90d9を追加し、outline: noneを削除",
+      "ボタンにfocus-visibleスタイル（box-shadowによるフォーカスリング）を追加",
+      "npm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "確定マスキング処理（300dpi画像化→黒塗り焼き込み→PDF再生成）を実装する",
+    "category": "ux",
+    "description": "main.jsを複数モジュールに分割し、重複するキーボードハンドラを統合する",
     "steps": [
-      "確定実行者がconfirmed状態でのみ「確定して出力」ボタンを押下可能にする",
-      "確定処理前の確認ダイアログ（マスキング件数・対象ページ数・警告）を実装",
-      "各ページを300dpiで逐次ラスタライズ（1ページずつ、全ページ同時禁止）する機能を実装",
-      "黒色矩形をbbox+最低3ptマージンで焼き込む機能（Pillow）を実装",
-      "焼き込み後の画像をPNG圧縮（FlateDecode）でPDFページとしてバッファに追加（PyMuPDF）",
-      "画像メモリを解放してから次ページへ進む逐次パイプライン処理を実装",
-      "出力ファイル名規則 <元ファイル名>_redacted_<YYYYMMDD_HHMMSS>_r<revision>.pdf を実装",
-      "同名ファイル存在時の自動採番（_r2, _r3...）を実装"
+      "src/ui/dialogs.jsを新規作成：全モーダルダイアログの表示/非表示/フォーカス管理を移動",
+      "src/ui/toast.jsを新規作成：トースト通知機能を移動",
+      "src/ui/sidebar.jsを新規作成：サイドバーのレンダリング・フィルタリング・イベントハンドラを移動",
+      "src/ui/menu.jsを新規作成：メニューバーのドロップダウン・キーボードナビゲーションを移動",
+      "2つのkeydownイベントリスナーを1つに統合",
+      "index.htmlで分割後のJSファイルを読み込む",
+      "各モジュールファイルが1000行以下であることを確認",
+      "npm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "hidden dataサニタイズと確定後検証を実装する",
+    "category": "ux",
+    "description": "PDFビューアのレンダリングキャンセルとfitToWidthのスクロールバー対応を追加する",
     "steps": [
-      "メタデータ（XMP・DocInfo辞書）の完全除去を実装",
-      "注釈（Annotations）の除去を実装",
-      "添付ファイル（EmbeddedFiles）の除去を実装",
-      "フォームフィールド（AcroForm/XFA）の除去を実装",
-      "JavaScriptアクション（OpenAction/AA）の除去を実装",
-      "ブックマーク（Outlines）の除去を実装",
-      "隠しレイヤー（OCProperties）の除去を実装",
-      "コピー禁止パーミッション設定を実装",
-      "出力後にPyMuPDFでPDFオブジェクト全走査による検証を実装（テキスト不在、hidden data不在の確認）",
-      "検証失敗時は出力PDFを破棄しエラーとして中断する機能を実装"
+      "pdf-viewer.jsのrenderPage()でPDF.jsのRenderTask.cancel()を使用し、ページ切替時に前のレンダリングをキャンセル",
+      "fitToWidth()でスクロールバー幅（約17px）を考慮してズーム計算を行う",
+      "masking-overlay.jsでホバー時の全再描画を最適化：変更されたリージョンのみ再描画するdirty-region方式を実装",
+      "handle hit detectionでコーナーハンドルとエッジハンドルを視覚的に区別（コーナーは大きく、エッジは小さく）",
+      "npm run buildが通ることを確認"
     ],
-    "passes": true
+    "passes": false
   },
   {
-    "category": "feature",
-    "description": "一時ファイル安全削除・自動保存・バックアップシステムを実装する",
+    "category": "ux",
+    "description": "PDF再オープン機能とbase64メモリ最適化を追加する",
     "steps": [
-      "確定処理中の一時ファイル（画像化中間ファイル等）を完了後に安全削除する機能を実装",
-      "仮マスキング設定の自動保存機能を実装（定期的・操作時）",
-      "アプリクラッシュ時の設定ファイル自動回復機能を実装",
-      "設定ファイルの直近3世代バックアップ保持機能を実装",
-      "ログファイルに元の個人情報テキストを含めない（region_id・bbox・typeのみ）ことを確認"
+      "main.jsのopenPdfFile()でドキュメント読込済みの場合に確認ダイアログを表示し、ユーザーが承認した場合のみ新しいPDFを開けるように変更",
+      "PDF再オープン時にundoManager.clear()、全グローバル状態のリセット、ウォーターマーク非表示を行う",
+      "main.jsのloadPdfWithAnalysis()でbase64文字列→binary string→Uint8Arrayの2段変換を1段に最適化",
+      "サイドバーのonSidebarRegionClick()でsetTimeout(200ms)をpdfViewerのonPageChangeコールバックに置き換え",
+      "npm run buildが通ることを確認"
     ],
-    "passes": true
-  },
-  {
-    "category": "feature",
-    "description": "警告バナー・設定ダイアログ・キーボードショートカット・アクセシビリティを実装する",
-    "steps": [
-      "PDFビューエリア上部に「自動検出には漏れがある可能性があります。全ページを目視で確認してください」警告バナーを常時表示",
-      "警告バナーをdraft/confirmed状態のみ表示し、finalizedで非表示にする",
-      "警告バナーを閉じる(dismiss)操作を無効とする",
-      "設定ダイアログ（フォントサイズ：標準/大/特大、圧縮方式：PNG/JPEG、JPEG品質下限85%）を実装",
-      "主要操作のキーボードショートカットを割り当て",
-      "主要ボタンにTooltipを表示",
-      "キーボードのみで全操作が完結できることを確認"
-    ],
-    "passes": true
-  },
-  {
-    "category": "feature",
-    "description": "メインウィンドウレイアウトとUI全体の統合・ポリッシュを行う",
-    "steps": [
-      "メニューバー（[ファイル] [設定] [ヘルプ]）を実装",
-      "メインレイアウト（左サイドバー + 右PDFビューエリア + 下部ツールバー）を実装",
-      "下部ツールバーに [全てON] [全てOFF] モード表示 [確定して出力] を配置",
-      "ステータスバーにドキュメント状態（draft/confirmed/finalized）を表示",
-      "ウィンドウリサイズに応じたレイアウト調整を実装",
-      "全体のUIが要件定義書の画面構成図に合致することを確認"
-    ],
-    "passes": true
+    "passes": false
   },
   {
     "category": "integration",
-    "description": "デジタルPDFのエンドツーエンドワークフローを検証する",
+    "description": "改善内容のエンドツーエンド統合テストを実行する",
     "steps": [
-      "デジタルネイティブPDF（テストセットC: 10ページ日本語+英数字混在）を用意",
-      "ファイル読込→テキスト抽出経路→bbox取得→自動検出→仮マスキング表示までの動作を確認",
-      "マスキングON/OFF・移動・追加・削除の全操作をテスト",
-      "確認承認→確定処理→安全PDF出力までの全流れを実行",
-      "出力PDFでテキスト抽出が0文字であることを確認",
-      "出力PDFでhidden dataが完全除去されていることを確認",
-      "座標精度が±2pt以内であることを確認",
-      "ログに全イベントが正しく記録されていることを確認"
+      "デジタルPDF（test-digital-10pages.pdf）で改善後のパイプラインをテスト：ファイル読込→テキスト抽出→PII検出→仮マスキング→確定→安全PDF出力",
+      "マイナンバー・法人番号のチェックデジット検証で誤検出が減少していることを確認",
+      "100MB相当のPDFでOOMクラッシュが発生しないことを確認（ファイルパスベース通信）",
+      "Pythonワーカーをkillした後の自動再起動を確認",
+      "全モーダルダイアログでキーボード操作（Tab, Escape, Enter）が完全に機能することを確認",
+      "Undoのページ跨ぎ操作が正しく動作することを確認",
+      "サイドバーの折りたたみ・展開が正しく動作することを確認",
+      "cargo test、cargo clippy、npm run buildが全て通ることを確認"
     ],
-    "passes": true
-  },
-  {
-    "category": "integration",
-    "description": "スキャンPDFのエンドツーエンドワークフローを検証する",
-    "steps": [
-      "スキャンPDF（テストセットA: 300dpi 10ページ日本語）を用意",
-      "ファイル読込→OCR経路→bbox取得→自動検出→仮マスキング表示までの動作を確認",
-      "マスキング編集操作をテスト",
-      "確認承認→確定処理→安全PDF出力までの全流れを実行",
-      "OCR精度（文字単位正答率90%以上）を確認",
-      "自動検出のRecall 85%以上、FPR 20%以下を確認",
-      "10ページの確定処理が30秒以内に完了することを確認",
-      "出力PDFのテキスト不在・hidden data完全除去を確認"
-    ],
-    "passes": true
-  },
-  {
-    "category": "integration",
-    "description": "暗号化PDF・署名付きPDFの特殊ケースワークフローを検証する",
-    "steps": [
-      "暗号化PDF（テストセットE）でパスワード入力→復号→通常処理を確認",
-      "誤パスワード入力で定型エラーメッセージが表示されることを確認",
-      "署名付きPDF（テストセットF）で署名検出→警告ダイアログ→処理継続を確認",
-      "処理後の安全PDFからデジタル署名が除去されていることを確認",
-      "キャンセル選択で読み込みが中止されることを確認"
-    ],
-    "passes": true
-  },
-  {
-    "category": "integration",
-    "description": "状態遷移制約・ロール権限・監査ログの統合テストを実行する",
-    "steps": [
-      "draft状態でファイル出力・印刷が全導線で無効化されていることを確認",
-      "confirmed状態でマスキング編集がブロックされることを確認",
-      "差し戻し（confirmed→draft）後も承認履歴が残存することを確認",
-      "同一文書を同日に2回処理して異なるファイル名で出力されることを確認",
-      "ログのハッシュチェーンが正しく構築され改ざん検知が動作することを確認",
-      "日次ルートハッシュが別ファイルに保存されることを確認",
-      "50ページPDFを10回連続処理してクラッシュが発生しないことを確認"
-    ],
-    "passes": true
-  },
-  {
-    "category": "packaging",
-    "description": "PyInstallerによるPythonワーカーのバンドルとWindowsインストーラーを作成する",
-    "steps": [
-      "PyInstallerでPythonワーカーをstandalone実行形式にバンドル",
-      "バンドルされたPythonワーカーがTauriアプリから正常に起動することを確認",
-      "Tauriのビルド設定でWindows向けインストーラー（MSI/EXE）を構成",
-      "WebView2ランタイムのオフラインインストーラーを同梱する設定",
-      "インストーラーでWebView2自動セットアップが動作することを確認",
-      "クリーンなWindows環境でインストール→起動→基本操作が動作することを確認"
-    ],
-    "passes": true
+    "passes": false
   }
 ]
 ```

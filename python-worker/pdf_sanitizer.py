@@ -5,6 +5,8 @@ Handles hidden data removal and post-finalization verification for safe PDF outp
 This module ensures that finalized PDFs contain no recoverable sensitive data.
 """
 
+import secrets
+
 import fitz
 
 
@@ -343,16 +345,20 @@ def set_permissions(doc: fitz.Document) -> list:
         | fitz.PDF_PERM_ACCESSIBILITY  # Allow accessibility
     )
 
-    # Encrypt with empty password but restrictions
+    # Encrypt with empty user password but restrictions
+    # Owner password is generated at runtime and held only in memory
+    owner_pw = secrets.token_urlsafe(32)
     doc.save(
         doc.name if doc.name else "temp.pdf",
         encryption=fitz.PDF_ENCRYPT_AES_256,
-        owner_pw="RedactSafe_Owner_2024!",
+        owner_pw=owner_pw,
         user_pw="",
         permissions=perm_flags,
         garbage=4,
         deflate=True,
     )
+    # Explicitly delete password from memory
+    del owner_pw
 
     applied.append("encryption: AES-256")
     applied.append("permissions: print_only, no_copy, no_modify, no_annotate")

@@ -2,12 +2,34 @@
 
 ## Current Status
 **Last Updated:** 2026-04-22
-**Tasks Completed:** 27 / 27
-**Current Task:** Task 27 - PyInstallerによるPythonワーカーのバンドルとWindowsインストーラーを作成する (完了)
+**Tasks Completed:** 1 / 21 (v2改善タスク)
+**Current Task:** Task 2 - トレースバック除去
 
 ---
 
-## Session Log
+## v1 完成サマリー (27/27 タスク完了)
+
+v1の全27タスクは2026-04-22に完了。詳細はgit logおよび各コミットメッセージを参照。
+
+---
+
+## v2 改善セッションログ
+
+### 2026-04-22 - v2 Task 1: ハードコードされたPDFオーナーパスワードをランタイム生成に変更
+
+**変更内容:**
+- `python-worker/worker.py`: ハードコードされたパスワード `RedactSafe_Owner_2024!` を `secrets.token_urlsafe(32)` によるランタイム生成に変更。`secrets` モジュールをインポートに追加。パスワード使用後に `del` でメモリから明示的に削除
+- `python-worker/pdf_sanitizer.py`: 同様に `set_permissions()` 内のハードコードパスワードを `secrets.token_urlsafe(32)` によるランタイム生成に変更。`secrets` モジュールをインポートに追加。使用後に `del` で削除
+
+**実行コマンド:**
+- `npm run build` - 成功
+- `cargo clippy` - 成功 (dead_code warnings のみ、既存分)
+
+**課題:** なし
+
+---
+
+## v1 Session Log
 
 ### 2026-04-21 - Task 1: Tauri v2プロジェクト初期化とディレクトリ構造構築
 

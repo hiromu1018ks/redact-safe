@@ -17,6 +17,7 @@ import hashlib
 import base64
 import io
 import os
+import secrets
 import traceback
 import tempfile
 
@@ -758,6 +759,8 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
         os.close(tmp_fd)
         try:
             # Set copy-prevention permissions via encryption
+            # Owner password is generated at runtime and held only in memory
+            owner_pw = secrets.token_urlsafe(32)
             perm_flags = (
                 fitz.PDF_PERM_PRINT          # Allow printing (image-based only)
                 | fitz.PDF_PERM_ACCESSIBILITY  # Allow accessibility
@@ -765,7 +768,7 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
             out_doc.save(
                 tmp_path,
                 encryption=fitz.PDF_ENCRYPT_AES_256,
-                owner_pw="RedactSafe_Owner_2024!",
+                owner_pw=owner_pw,
                 user_pw="",
                 permissions=perm_flags,
                 garbage=4,
@@ -773,6 +776,8 @@ def handle_finalize_masking(params: dict, request_id: int = 0) -> dict:
             )
             out_doc.close()
             out_doc = None
+            # Explicitly delete password from memory
+            del owner_pw
 
             # Read back the saved file
             with open(tmp_path, "rb") as f:
