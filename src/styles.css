@@ -1290,3 +1290,114 @@ body.font-size-xlarge .menu-shortcut { font-size: 14px; }
 body.font-size-xlarge .mode-display { font-size: 14px; }
 body.font-size-xlarge #status-bar { font-size: 13px; }
 body.font-size-xlarge .status-bar-badge { font-size: 12px; }
+
+/* ============================================================
+   Toast Notifications
+   ============================================================ */
+
+#toast-container {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 12px 20px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateX(120%);
+  transition: transform 0.3s ease;
+  pointer-events: auto;
+  max-width: 400px;
+  word-break: break-word;
+}
+
+.toast-visible {
+  transform: translateX(0);
+}
+
+.toast-error {
+  background-color: #d32f2f;
+}
+
+.toast-warning {
+  background-color: #f57c00;
+}
+
+.toast-info {
+  background-color: #1976d2;
+}
+
+/* ============================================================
+   Sidebar Toggle
+   ============================================================ */
+
+.sidebar-toggle-btn {
+  background: none;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  color: #666;
+  border-radius: 3px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-btn:hover {
+  background: #e0e0e0;
+  color: #333;
+}
+
+#sidebar.collapsed {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: none;
+}
+
+#sidebar.collapsed .sidebar-header,
+#sidebar.collapsed .sidebar-filters,
+#sidebar.collapsed .sidebar-actions,
+#sidebar.collapsed #region-list,
+#sidebar.collapsed #sidebar-placeholder {
+  display: none;
+}
+
+#sidebar.collapsed .sidebar-toggle-btn {
+  display: none;
+}
+
+.sidebar-expand-btn {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #f5f5f5;
+  border: 1px solid #ddd;
+  border-left: none;
+  padding: 8px 4px;
+  cursor: pointer;
+  font-size: 16px;
+  color: #666;
+  border-radius: 0 4px 4px 0;
+  z-index: 100;
+  display: none;
+}
+
+.sidebar-expand-btn:hover {
+  background: #e0e0e0;
+  color: #333;
+}
+
+#sidebar.collapsed ~ .sidebar-expand-btn {
+  display: block;
+}

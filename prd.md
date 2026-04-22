@@ -286,7 +286,7 @@ v1と同じ（変更なし）
       "サイドバーに折りたたみボタンを追加し、CSSクラスで表示/非表示を切り替え",
       "npm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "ux",

@@ -36,6 +36,7 @@
           <div class="sidebar-header">
             <h2>検出一覧</h2>
             <span id="region-count" class="region-count">0件</span>
+            <button id="btn-sidebar-toggle" class="sidebar-toggle-btn" aria-label="サイドバーを折りたたむ" title="サイドバーを折りたたむ">&laquo;</button>
           </div>
           <div id="sidebar-placeholder">
             <p>PDFファイルを読み込んでください</p>
@@ -68,6 +69,7 @@
             <div id="region-list" class="region-list"></div>
           </div>
         </aside>
+        <button id="btn-sidebar-expand" class="sidebar-expand-btn" aria-label="サイドバーを展開" title="サイドバーを展開">&raquo;</button>
         <section id="viewer">
           <div id="warning-banner" style="display:none">
             <span class="warning-banner-icon">&#9888;</span>
@@ -376,6 +378,8 @@
         </div>
       </div>
     </div>
+
+    <div id="toast-container" aria-live="polite"></div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

@@ -50,6 +50,21 @@ const filterTypeSelect = document.getElementById("filter-type");
 const filterStatusSelect = document.getElementById("filter-status");
 const btnSidebarAllOn = document.getElementById("btn-sidebar-all-on");
 const btnSidebarAllOff = document.getElementById("btn-sidebar-all-off");
+const sidebar = document.getElementById("sidebar");
+const btnSidebarToggle = document.getElementById("btn-sidebar-toggle");
+const btnSidebarExpand = document.getElementById("btn-sidebar-expand");
+
+// Sidebar collapse/expand
+if (btnSidebarToggle && sidebar && btnSidebarExpand) {
+  btnSidebarToggle.addEventListener("click", () => {
+    sidebar.classList.add("collapsed");
+    btnSidebarExpand.style.display = "block";
+  });
+  btnSidebarExpand.addEventListener("click", () => {
+    sidebar.classList.remove("collapsed");
+    btnSidebarExpand.style.display = "none";
+  });
+}
 
 /** All regions across all pages (fetched from backend or test regions) */
 let allRegionsByPage = {}; // { pageNum: [regions...] }
@@ -552,6 +567,31 @@ btnCancelProgress.addEventListener("click", async () => {
   }
   progressManager.hide();
 });
+
+// --- Toast Notifications ---
+const TOAST_TYPES = { error: "error", warning: "warning", info: "info" };
+
+function showToast(message, type = "error") {
+  const container = document.getElementById("toast-container");
+  if (!container) return;
+
+  const toast = document.createElement("div");
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  toast.setAttribute("role", "alert");
+  toast.setAttribute("aria-live", "assertive");
+
+  container.appendChild(toast);
+
+  // Trigger slide-in animation
+  requestAnimationFrame(() => toast.classList.add("toast-visible"));
+
+  // Auto-dismiss after 3 seconds
+  setTimeout(() => {
+    toast.classList.remove("toast-visible");
+    toast.addEventListener("transitionend", () => toast.remove(), { once: true });
+  }, 3000);
+}
 
 // --- PDF Viewer ---
 let pdfViewer = null;
@@ -1855,7 +1895,7 @@ async function loadPdfWithAnalysis(arrayBuffer, fileName) {
     await pdfViewer.loadPdf(arrayBuffer, fileName);
   } catch (e) {
     console.error("Failed to load PDF:", e);
-    alert("PDFの読み込みに失敗しました: " + e.message);
+    showToast("PDFの読み込みに失敗しました: " + e.message);
     return;
   }
 
@@ -2064,7 +2104,7 @@ document.addEventListener("DOMContentLoaded", () => {
       await updateSidebarRegions();
     } catch (e) {
       console.error("Failed to confirm document:", e);
-      alert("確認に失敗しました: " + e);
+      showToast("確認に失敗しました: " + e);
     }
   });
 
@@ -2088,7 +2128,7 @@ document.addEventListener("DOMContentLoaded", () => {
       await updateSidebarRegions();
     } catch (e) {
       console.error("Failed to rollback document:", e);
-      alert("差し戻しに失敗しました: " + e);
+      showToast("差し戻しに失敗しました: " + e);
     }
   });
 
@@ -2123,7 +2163,7 @@ document.addEventListener("DOMContentLoaded", () => {
       summary = await invoke("get_document_summary");
     } catch (e) {
       console.error("Failed to get document summary:", e);
-      alert("ドキュメント情報の取得に失敗しました: " + e);
+      showToast("ドキュメント情報の取得に失敗しました: " + e);
       return;
     }
 
@@ -2215,7 +2255,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       console.error("Failed to finalize document:", e);
       progressManager.hide();
-      alert("確定処理に失敗しました: " + e);
+      showToast("確定処理に失敗しました: " + e);
     }
   });
 
@@ -2223,7 +2263,7 @@ document.addEventListener("DOMContentLoaded", () => {
   window.addEventListener("beforeprint", (e) => {
     if (docStatusManager.getStatus() !== "finalized") {
       e.preventDefault();
-      alert("確定済みのドキュメントのみ印刷可能です。");
+      showToast("確定済みのドキュメントのみ印刷可能です。");
     }
   });
 
@@ -2387,7 +2427,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!file) return;
 
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-      alert("PDFファイルのみ読み込み可能です");
+      showToast("PDFファイルのみ読み込み可能です");
       return;
     }
 
