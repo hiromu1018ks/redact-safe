@@ -206,7 +206,7 @@ v1と同じ（変更なし）
       "テストケースを追加：有効・無効なマイナンバー・法人番号の検出確認",
       "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "detection",

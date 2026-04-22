@@ -30,6 +30,58 @@ REGEX_TIMEOUT_SECONDS = 2.0
 _rules_cache = {"compiled": None, "rules_path": None}
 
 
+def validate_my_number(digits_str):
+    """Validate a 12-digit My Number (個人番号) using the check digit algorithm.
+
+    Args:
+        digits_str: String of exactly 12 digits.
+
+    Returns:
+        True if the check digit is valid, False otherwise.
+    """
+    if len(digits_str) != 12 or not digits_str.isdigit():
+        return False
+
+    digits = [int(d) for d in digits_str]
+    # Weights for positions 1-11: 6, 5, 4, 3, 2, 1, 6, 5, 4, 3, 2
+    weights = [6, 5, 4, 3, 2, 1, 6, 5, 4, 3, 2]
+    total = sum(digits[i] * weights[i] for i in range(11))
+    remainder = total % 11
+
+    if remainder <= 1:
+        expected_check = 0
+    else:
+        expected_check = 11 - remainder
+
+    return digits[11] == expected_check
+
+
+def validate_corporate_number(digits_str):
+    """Validate a 13-digit Corporate Number (法人番号) using the check digit algorithm.
+
+    Args:
+        digits_str: String of exactly 13 digits.
+
+    Returns:
+        True if the check digit is valid, False otherwise.
+    """
+    if len(digits_str) != 13 or not digits_str.isdigit():
+        return False
+
+    digits = [int(d) for d in digits_str]
+    # Weights for positions 1-12: 1, 2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4
+    weights = [1, 2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4]
+    total = sum(digits[i] * weights[i] for i in range(12))
+    remainder = total % 9
+
+    if remainder == 0:
+        expected_check = 0
+    else:
+        expected_check = 9 - remainder
+
+    return digits[12] == expected_check
+
+
 def _get_default_rules_path():
     """Get path to the default detection rules YAML file."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "detection_rules.yaml")
@@ -422,8 +474,7 @@ def detect_pii(text_regions, rules=None, rules_path=None, enabled_types=None,
     detections = []
     executor = ThreadPoolExecutor(max_workers=1)
 
-    try:
-        for region in text_regions:
+    for region in text_regions:
             text = region.get("text", "")
             if not text:
                 continue
@@ -453,25 +504,31 @@ def detect_pii(text_regions, rules=None, rules_path=None, enabled_types=None,
                     )
                     continue
 
-            for match in matches:
-                matched_text = match.group()
+                for match in matches:
+                    matched_text = match.group()
 
-                detection = {
-                    "id": str(uuid.uuid4()),
-                    "text": matched_text,
-                    "bbox_pt": list(bbox) if bbox else [],
-                    "type": rule["type"],
-                    "confidence": round(
-                        min(region_conf * rule["confidence"], 1.0), 4
-                    ),
-                    "source": "auto",
-                    "rule_id": rule["id"],
-                    "rule_name": rule["name"],
-                    "start": match.start(),
-                    "end": match.end(),
-                    "original_region_id": region.get("id"),
-                }
-                detections.append(detection)
+                    # Validate check digits for structured number types
+                    if rule["type"] == "my_number" and not validate_my_number(matched_text):
+                        continue
+                    if rule["type"] == "corporate_number" and not validate_corporate_number(matched_text):
+                        continue
+
+                    detection = {
+                        "id": str(uuid.uuid4()),
+                        "text": matched_text,
+                        "bbox_pt": list(bbox) if bbox else [],
+                        "type": rule["type"],
+                        "confidence": round(
+                            min(region_conf * rule["confidence"], 1.0), 4
+                        ),
+                        "source": "auto",
+                        "rule_id": rule["id"],
+                        "rule_name": rule["name"],
+                        "start": match.start(),
+                        "end": match.end(),
+                        "original_region_id": region.get("id"),
+                    }
+                    detections.append(detection)
 
     # MeCab-based name detection
     if enable_name_detection:
@@ -571,3 +628,46 @@ def detect_pii_base64(
         "region_count": len(text_regions),
         "detection_count": len(detections),
     }
+
+
+# --- Unit tests for check digit validation ---
+
+if __name__ == "__main__":
+    import unittest
+
+    class TestMyNumberValidation(unittest.TestCase):
+        def test_valid_my_number(self):
+            # Check digit: total=176, rem=0, expected=0 → 123456789010
+            self.assertTrue(validate_my_number("123456789010"))
+
+        def test_invalid_my_number_bad_check_digit(self):
+            # Same prefix but wrong check digit (8 instead of 0)
+            self.assertFalse(validate_my_number("123456789018"))
+
+        def test_invalid_my_number_too_short(self):
+            self.assertFalse(validate_my_number("12345678901"))
+
+        def test_invalid_my_number_too_long(self):
+            self.assertFalse(validate_my_number("1234567890123"))
+
+        def test_invalid_my_number_non_digit(self):
+            self.assertFalse(validate_my_number("12345678901a"))
+
+    class TestCorporateNumberValidation(unittest.TestCase):
+        def test_valid_corporate_number(self):
+            # Check digit: total=36, rem=0, expected=0 → 6010001003220
+            self.assertTrue(validate_corporate_number("6010001003220"))
+
+        def test_invalid_corporate_number_bad_check_digit(self):
+            self.assertFalse(validate_corporate_number("6010001003226"))
+
+        def test_invalid_corporate_number_too_short(self):
+            self.assertFalse(validate_corporate_number("601000100322"))
+
+        def test_invalid_corporate_number_too_long(self):
+            self.assertFalse(validate_corporate_number("60100010032267"))
+
+        def test_invalid_corporate_number_non_digit(self):
+            self.assertFalse(validate_corporate_number("601000100322a"))
+
+    unittest.main()
