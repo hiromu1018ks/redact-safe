@@ -6,7 +6,7 @@ use audit_log::{AuditLogger, AuditRecord};
 use document_state::{DocumentStatus, MaskingDocument, OperatorInfo, Region};
 use python_worker::{PingResponse, PythonWorker, WorkerStatus};
 use std::sync::Mutex;
-use tauri::{Emitter, State};
+use tauri::{Emitter, Manager, State};
 
 struct WorkerState(Mutex<Option<PythonWorker>>);
 
@@ -1218,10 +1218,17 @@ pub fn run() {
             }
             Ok(())
         })
-        .on_window_event(|_window, event| {
+        .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 // Save root hash on window close (graceful shutdown)
-                // Access the audit state from the app handle
+                let app_handle = window.app_handle();
+                if let Some(audit_state) = app_handle.try_state::<AuditState>() {
+                    if let Ok(logger) = audit_state.0.lock() {
+                        if let Err(e) = logger.save_current_day_root_hash() {
+                            eprintln!("Failed to save root hash on shutdown: {}", e);
+                        }
+                    }
+                }
             }
         })
         .run(tauri::generate_context!())

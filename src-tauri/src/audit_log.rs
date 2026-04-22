@@ -225,7 +225,6 @@ impl AuditLogger {
     }
 
     /// Save root hash for the current day (call on shutdown).
-    #[allow(dead_code)]
     pub fn save_current_day_root_hash(&self) -> Result<(), String> {
         let current_date = self.current_date.lock().map_err(|e| e.to_string())?;
         let count = self.daily_record_count.lock().map_err(|e| e.to_string())?;

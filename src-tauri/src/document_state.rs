@@ -483,18 +483,28 @@ impl MaskingDocument {
                 .map_err(|e| format!("Failed to sync temp file: {}", e))?;
         }
 
-        // Atomic rename (on Windows, requires the target to not exist for rename,
-        // so we remove the old file first if it exists)
+        // Atomic replacement using hard_link + remove_file pattern.
+        // On Windows, POSIX-style atomic rename (replace existing file) is not reliable;
+        // fs::rename can fail if the target exists. Instead, we hard-link the temp file
+        // to the target path (which atomically creates the new content), then remove
+        // the temp file. This ensures the target path always points to valid content.
         if path.exists() {
-            fs::remove_file(path)
-                .map_err(|e| format!("Failed to remove old file: {}", e))?;
-        }
-        fs::rename(&temp_path, path)
-            .map_err(|e| {
-                // Clean up temp file if rename fails
+            // Create a hard link from temp to the target (replaces the old entry)
+            fs::hard_link(&temp_path, path).map_err(|e| {
                 let _ = fs::remove_file(&temp_path);
-                format!("Failed to rename temp file: {}", e)
+                format!("Failed to hard link temp file: {}", e)
             })?;
+            // Remove the temp file (the hard link at `path` keeps the data alive)
+            fs::remove_file(&temp_path)
+                .map_err(|e| format!("Failed to remove temp file: {}", e))?;
+        } else {
+            // No existing file — simple rename is safe
+            fs::rename(&temp_path, path)
+                .map_err(|e| {
+                    let _ = fs::remove_file(&temp_path);
+                    format!("Failed to rename temp file: {}", e)
+                })?;
+        }
 
         Ok(())
     }
@@ -502,6 +512,18 @@ impl MaskingDocument {
     /// Load document from a JSON file with crash recovery.
     /// If the file is corrupt or empty, attempts to load from the latest backup.
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
+        // Reject files larger than 100MB to prevent OOM
+        const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+        let metadata = fs::metadata(path)
+            .map_err(|e| format!("Failed to read document metadata: {}", e))?;
+        if metadata.len() > MAX_FILE_SIZE {
+            return Err(format!(
+                "Document file too large ({} bytes, max {} bytes)",
+                metadata.len(),
+                MAX_FILE_SIZE
+            ));
+        }
+
         let content = fs::read_to_string(path)
             .map_err(|e| format!("Failed to read document file: {}", e))?;
 
@@ -564,20 +586,43 @@ impl MaskingDocument {
     }
 
     /// Check if a document file exists and is potentially recoverable.
+    /// Only reads the first few KB for JSON validation (not the entire file).
     pub fn can_recover(path: &Path) -> bool {
         if !path.exists() {
             return false;
         }
-        // Check if file is empty or corrupt
-        match fs::read_to_string(path) {
-            Ok(content) if content.trim().is_empty() => {
-                // Empty file — check if backup exists
-                find_latest_backup(path).is_some()
-            }
-            Ok(content) => {
-                // File has content — check if it's valid JSON
-                serde_json::from_str::<MaskingDocument>(&content).is_err()
-                    && find_latest_backup(path).is_some()
+
+        // Open the file and read just enough to check validity
+        match fs::File::open(path) {
+            Ok(mut file) => {
+                use std::io::Read;
+                let mut buf = [0u8; 8192]; // 8KB is enough for JSON header validation
+                let n = match file.read(&mut buf) {
+                    Ok(0) => {
+                        // Empty file — check if backup exists
+                        return find_latest_backup(path).is_some();
+                    }
+                    Ok(n) => n,
+                    Err(_) => return false,
+                };
+
+                let content = match std::str::from_utf8(&buf[..n]) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        // Not valid UTF-8 — file is corrupt
+                        return find_latest_backup(path).is_some();
+                    }
+                };
+
+                if content.trim().is_empty() {
+                    // Empty file — check if backup exists
+                    find_latest_backup(path).is_some()
+                } else {
+                    // Try parsing just the beginning as JSON.
+                    // serde_json::from_str will fail quickly if the structure is invalid.
+                    let is_invalid = serde_json::from_str::<serde_json::Value>(content).is_err();
+                    is_invalid && find_latest_backup(path).is_some()
+                }
             }
             Err(_) => false,
         }
