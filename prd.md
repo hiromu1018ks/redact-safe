@@ -220,7 +220,7 @@ v1と同じ（変更なし）
       "テストケースを追加：新しい電話番号形式、重複排除、不正日付の確認",
       "cargo clippyとnpm run buildが通ることを確認"
     ],
-    "passes": false
+    "passes": true
   },
   {
     "category": "detection",

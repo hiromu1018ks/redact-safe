@@ -117,7 +117,7 @@ def _calculate_name_confidence(name_tokens, context_text):
 
     # Boost for honorific/title after the name
     full_name = "".join(t["surface"] for t in name_tokens)
-    honorifics = ["様", "氏", "さん", "殿", "先生", "氏"]
+    honorifics = ["様", "氏", "さん", "殿", "先生"]
     for honorific in honorifics:
         if honorific in context_text:
             idx = context_text.find(full_name)

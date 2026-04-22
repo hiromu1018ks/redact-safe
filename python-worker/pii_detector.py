@@ -82,6 +82,78 @@ def validate_corporate_number(digits_str):
     return digits[12] == expected_check
 
 
+def validate_birth_date(matched_text):
+    """Validate that a matched date string contains a plausible date.
+
+    Rejects dates with month > 12 or day > 31, and other clearly invalid values.
+    Supports Japanese era and Western calendar formats.
+
+    Args:
+        matched_text: The matched date string.
+
+    Returns:
+        True if the date is plausible, False otherwise.
+    """
+    import re as _re
+
+    # Extract month and day from the matched text
+    # Japanese era format: 令和5年4月22日
+    m = _re.search(r'(\d{1,2})月\s*(\d{1,2})日', matched_text)
+    if m:
+        month = int(m.group(1))
+        day = int(m.group(2))
+        if month < 1 or month > 12:
+            return False
+        if day < 1 or day > 31:
+            return False
+        return True
+
+    # Western format: 2026-04-22 or 2026/04/22 or 2026.04.22
+    m = _re.search(r'(\d{4})[-\/.]\s*(\d{1,2})[-\/.]\s*(\d{1,2})', matched_text)
+    if m:
+        month = int(m.group(2))
+        day = int(m.group(3))
+        if month < 1 or month > 12:
+            return False
+        if day < 1 or day > 31:
+            return False
+        return True
+
+    # If we can't parse it, let it through (be permissive)
+    return True
+
+
+def _compute_bbox_iou(a, b):
+    """Compute Intersection over Union (IoU) of two bboxes.
+
+    Each bbox is [x, y, width, height] in PDF point coordinates.
+
+    Returns:
+        Float IoU value between 0.0 and 1.0.
+    """
+    if not a or not b or len(a) < 4 or len(b) < 4:
+        return 0.0
+
+    ax1, ay1, aw, ah = a[0], a[1], a[2], a[3]
+    bx1, by1, bw, bh = b[0], b[1], b[2], b[3]
+    ax2, ay2 = ax1 + aw, ay1 + ah
+    bx2, by2 = bx1 + bw, by1 + bh
+
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+
+    intersection = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+    area_a = aw * ah
+    area_b = bw * bh
+    union = area_a + area_b - intersection
+
+    if union <= 0:
+        return 0.0
+    return intersection / union
+
+
 def _get_default_rules_path():
     """Get path to the default detection rules YAML file."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "detection_rules.yaml")
@@ -512,6 +584,9 @@ def detect_pii(text_regions, rules=None, rules_path=None, enabled_types=None,
                         continue
                     if rule["type"] == "corporate_number" and not validate_corporate_number(matched_text):
                         continue
+                    # Validate birth dates (reject 99月99日 etc.)
+                    if rule["type"] == "birth_date" and not validate_birth_date(matched_text):
+                        continue
 
                     detection = {
                         "id": str(uuid.uuid4()),
@@ -535,7 +610,30 @@ def detect_pii(text_regions, rules=None, rules_path=None, enabled_types=None,
         try:
             from name_detector import detect_names
             name_detections = detect_names(text_regions, enabled_types=enabled_types)
-            detections.extend(name_detections)
+
+            # Deduplicate: remove regex detections that overlap with MeCab name detections
+            # When bboxes overlap significantly (IoU > 0.3), keep the higher-confidence one
+            if name_detections:
+                filtered = []
+                for det in detections:
+                    is_duplicate = False
+                    if det.get("type") == "name" and det.get("bbox_pt"):
+                        det_bbox = det["bbox_pt"]
+                        for name_det in name_detections:
+                            name_bbox = name_det.get("bbox_pt", [])
+                            if name_bbox and len(name_bbox) == 4:
+                                iou = _compute_bbox_iou(det_bbox, name_bbox)
+                                if iou > 0.3:
+                                    # Keep the one with higher confidence
+                                    if name_det.get("confidence", 0) >= det.get("confidence", 0):
+                                        is_duplicate = True
+                                        break
+                    if not is_duplicate:
+                        filtered.append(det)
+                detections = filtered
+                detections.extend(name_detections)
+            else:
+                detections.extend(name_detections)
         except Exception as e:
             sys.stderr.write(f"Warning: Name detection failed: {e}\n")
 

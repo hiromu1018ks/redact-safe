@@ -169,9 +169,11 @@ def _is_same_line(a: Dict, b: Dict, threshold: float) -> bool:
 
     They are on the same line if their vertical ranges overlap or are
     within the threshold fraction of the max height apart.
+    An absolute maximum gap of 20pt prevents merging bboxes from
+    very different lines when heights are large (e.g., titles).
     """
     max_height = max(a["height"], b["height"])
-    proximity_threshold = max_height * threshold
+    proximity_threshold = min(max_height * threshold, 20.0)  # cap at 20pt
 
     # Check vertical overlap
     y_top_max = max(a["y_top"], b["y_top"])
@@ -226,7 +228,7 @@ def _merge_group(
         if conf is not None:
             confidences.append(float(conf))
 
-    merged_text = "".join(texts) if texts else ""
+    merged_text = " ".join(texts) if texts else ""
     avg_confidence = (
         round(sum(confidences) / len(confidences), 4)
         if confidences
